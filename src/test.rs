@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Events as _, Ledger}, Address, Env, String};
+use soroban_sdk::{testutils::{Address as _, Events as _, Ledger}, Address, BytesN, Env, String};
 
 fn create_test_contract(env: &Env) -> (Address, TrustLinkContractClient) {
     let contract_id = env.register_contract(None, TrustLinkContract);
@@ -477,4 +477,38 @@ fn test_batch_revoke_empty_vec() {
     let ids: soroban_sdk::Vec<String> = soroban_sdk::Vec::new(&env);
     let count = client.revoke_attestations_batch(&issuer, &ids);
     assert_eq!(count, 0);
+}
+
+// ── Upgrade tests ─────────────────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_upgrade_unauthorized_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let (_, client) = create_test_contract(&env);
+    client.initialize(&admin);
+
+    // Provide a dummy 32-byte hash — auth check fires before WASM lookup
+    let dummy_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+    // non_admin is not the registered admin — must panic Unauthorized
+    client.upgrade(&non_admin, &dummy_hash);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_upgrade_not_initialized_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (_, client) = create_test_contract(&env);
+    // Contract never initialized — must panic NotInitialized
+
+    let dummy_hash = BytesN::from_array(&env, &[0u8; 32]);
+    client.upgrade(&admin, &dummy_hash);
 }
