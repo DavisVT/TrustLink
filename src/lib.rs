@@ -9,7 +9,7 @@
 //! before executing financial operations.
 
 mod storage;
-mod types;
+pub mod types;
 mod validation;
 mod events;
 
@@ -145,11 +145,20 @@ impl TrustLinkContract {
         subject: Address,
         claim_type: String,
         expiration: Option<u64>,
+        valid_from: Option<u64>,
     ) -> Result<String, Error> {
         issuer.require_auth();
         Validation::require_issuer(&env, &issuer)?;
 
         let timestamp = env.ledger().timestamp();
+        
+        if let Some(vf) = valid_from {
+            if vf <= timestamp {
+                return Err(Error::InvalidValidFrom);
+            }
+        }
+        
+        // Generate deterministic ID from attestation data
 
         let attestation_id = Attestation::generate_id(
             &env,
@@ -171,6 +180,7 @@ impl TrustLinkContract {
             timestamp,
             expiration,
             revoked: false,
+            valid_from,
         };
 
         Storage::set_attestation(&env, &attestation);
@@ -227,6 +237,41 @@ impl TrustLinkContract {
         Ok(())
     }
 
+    /// Renew an existing attestation with a new expiration (issuer only)
+    pub fn renew_attestation(
+        env: Env,
+        issuer: Address,
+        attestation_id: String,
+        new_expiration: Option<u64>,
+    ) -> Result<(), Error> {
+        issuer.require_auth();
+
+        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
+
+        if attestation.issuer != issuer {
+            return Err(Error::Unauthorized);
+        }
+
+        Validation::require_issuer(&env, &issuer)?;
+
+        if attestation.revoked {
+            return Err(Error::AlreadyRevoked);
+        }
+
+        if let Some(t) = new_expiration {
+            if t <= env.ledger().timestamp() {
+                return Err(Error::InvalidExpiration);
+            }
+        }
+
+        attestation.expiration = new_expiration;
+        Storage::set_attestation(&env, &attestation);
+        Events::attestation_renewed(&env, &attestation_id, &issuer, new_expiration);
+
+        Ok(())
+    }
+
+    /// Check if an address has a valid attestation of a given type
     /// Revoke multiple attestations in a single call (issuer only).
     /// Auth is checked once for the issuer. Each attestation is validated
     /// individually — if any attestation does not belong to the caller or is
@@ -490,40 +535,106 @@ impl TrustLinkContract {
         Storage::get_admin(&env)
     }
 
-    /// Return the total number of attestations ever created for a subject.
+    /// Register a known claim type with a human-readable description (admin only).
     ///
-    /// Includes revoked and expired attestations. Returns 0 if the subject
-    /// has no attestations.
-    pub fn get_subject_attestation_count(env: Env, subject: Address) -> u32 {
-        Storage::get_subject_attestations(&env, &subject).len()
+    /// Pre-registers standard types on first deployment. Re-registering an
+    /// existing claim type updates its description.
+    ///
+    /// Emits a `clmtype` event on success.
+    ///
+    /// # Parameters
+    /// - `admin` — current administrator address (must authorize).
+    /// - `claim_type` — identifier string, e.g. `"KYC_PASSED"`.
+    /// - `description` — human-readable description of the claim type.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] — contract has not been initialized.
+    /// - [`Error::Unauthorized`] — `admin` is not the registered administrator.
+    pub fn register_claim_type(
+        env: Env,
+        admin: Address,
+        claim_type: String,
+        description: String,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        Validation::require_admin(&env, &admin)?;
+
+        let info = ClaimTypeInfo { claim_type: claim_type.clone(), description: description.clone() };
+        Storage::set_claim_type(&env, &info);
+        Events::claim_type_registered(&env, &claim_type, &description);
+        Ok(())
     }
 
-    /// Return the total number of attestations ever created by an issuer.
+    /// Return the description for a registered claim type, or `None` if unknown.
     ///
-    /// Includes revoked and expired attestations. Returns 0 if the issuer
-    /// has created no attestations.
-    pub fn get_issuer_attestation_count(env: Env, issuer: Address) -> u32 {
-        Storage::get_issuer_attestations(&env, &issuer).len()
+    /// # Parameters
+    /// - `claim_type` — identifier to look up.
+    pub fn get_claim_type_description(env: Env, claim_type: String) -> Option<String> {
+        Storage::get_claim_type(&env, &claim_type).map(|info| info.description)
     }
 
-    /// Return the number of currently valid attestations for a subject.
+    /// Return a paginated list of registered claim type identifiers.
     ///
-    /// Only counts attestations that are neither revoked nor expired.
-    /// Returns 0 if the subject has no valid attestations.
-    pub fn get_valid_claim_count(env: Env, subject: Address) -> u32 {
-        let attestation_ids = Storage::get_subject_attestations(&env, &subject);
-        let current_time = env.ledger().timestamp();
-        let mut count: u32 = 0;
-
-        for id in attestation_ids.iter() {
-            if let Ok(attestation) = Storage::get_attestation(&env, &id) {
-                if attestation.get_status(current_time) == AttestationStatus::Valid {
-                    count += 1;
-                }
+    /// # Parameters
+    /// - `start` — zero-based index of the first item to return.
+    /// - `limit` — maximum number of items to return.
+    ///
+    /// # Returns
+    /// A [`Vec<String>`] of claim type strings in registration order.
+    pub fn list_claim_types(env: Env, start: u32, limit: u32) -> Vec<String> {
+        let all = Storage::get_claim_type_list(&env);
+        let total = all.len();
+        let mut result = Vec::new(&env);
+        let end = (start + limit).min(total);
+        for i in start..end {
+            if let Some(ct) = all.get(i) {
+                result.push_back(ct);
             }
         }
+        result
+    }
 
-        count
+    /// Update the expiration of an existing attestation.
+    ///
+    /// Only the original issuer may update the expiration. The attestation must
+    /// not be revoked. The expiration can be extended, shortened, or removed
+    /// entirely by passing `None`.
+    ///
+    /// Emits an `attestation_updated` event on success.
+    ///
+    /// # Parameters
+    /// - `issuer` — the issuer who created the attestation (must authorize).
+    /// - `attestation_id` — ID of the attestation to update.
+    /// - `new_expiration` — new expiration timestamp, or `None` to remove expiration.
+    ///
+    /// # Errors
+    /// - [`Error::NotFound`] — no attestation exists with the given ID.
+    /// - [`Error::Unauthorized`] — caller is not the original issuer.
+    /// - [`Error::AlreadyRevoked`] — attestation has already been revoked.
+    pub fn update_expiration(
+        env: Env,
+        issuer: Address,
+        attestation_id: String,
+        new_expiration: Option<u64>,
+    ) -> Result<(), Error> {
+        issuer.require_auth();
+
+        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
+
+        if attestation.issuer != issuer {
+            return Err(Error::Unauthorized);
+        }
+
+        if attestation.revoked {
+            return Err(Error::AlreadyRevoked);
+        }
+
+        attestation.expiration = new_expiration;
+        Storage::set_attestation(&env, &attestation);
+
+        Events::attestation_updated(&env, &attestation_id, &issuer, new_expiration);
+
+        Ok(())
     }
 
     /// Return the semver version string set at initialization (e.g. `"1.0.0"`).
