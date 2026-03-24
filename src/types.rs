@@ -1,6 +1,6 @@
 //! Shared data types and error definitions for TrustLink.
 
-use soroban_sdk::{contracterror, contracttype, Address, Bytes, Env, String};
+use soroban_sdk::{contracterror, contracttype, xdr::ToXdr, Address, Bytes, Env, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +46,9 @@ pub struct Attestation {
     pub metadata: Option<String>,
     pub valid_from: Option<u64>,
     pub imported: bool,
+    pub bridged: bool,
+    pub source_chain: Option<String>,
+    pub source_tx: Option<String>,
 }
 
 #[contracttype]
@@ -76,35 +79,8 @@ pub enum Error {
 }
 
 impl Attestation {
-    pub fn generate_id(
-        env: &Env,
-        issuer: &Address,
-        subject: &Address,
-        claim_type: &String,
-        timestamp: u64,
-    ) -> String {
-        let issuer_str = issuer.to_string();
-        let subject_str = subject.to_string();
-
-        let issuer_len = issuer_str.len() as usize;
-        let subject_len = subject_str.len() as usize;
-        let claim_len = claim_type.len() as usize;
-
-        let mut issuer_buf = [0u8; 64];
-        let mut subject_buf = [0u8; 64];
-        let mut claim_buf = [0u8; 256];
-
-        issuer_str.copy_into_slice(&mut issuer_buf[..issuer_len]);
-        subject_str.copy_into_slice(&mut subject_buf[..subject_len]);
-        claim_type.copy_into_slice(&mut claim_buf[..claim_len]);
-
-        let mut payload = Bytes::new(env);
-        payload.append(&Bytes::from_slice(env, &issuer_buf[..issuer_len]));
-        payload.append(&Bytes::from_slice(env, &subject_buf[..subject_len]));
-        payload.append(&Bytes::from_slice(env, &claim_buf[..claim_len]));
-        payload.append(&Bytes::from_slice(env, &timestamp.to_be_bytes()));
-
-        let hash = env.crypto().sha256(&payload).to_array();
+    fn hash_payload(env: &Env, payload: &Bytes) -> String {
+        let hash = env.crypto().sha256(payload).to_array();
         const HEX: &[u8; 16] = b"0123456789abcdef";
 
         let mut hex = [0u8; 32];
@@ -114,6 +90,40 @@ impl Attestation {
         }
 
         String::from_bytes(env, &hex)
+    }
+
+    pub fn generate_id(
+        env: &Env,
+        issuer: &Address,
+        subject: &Address,
+        claim_type: &String,
+        timestamp: u64,
+    ) -> String {
+        let mut payload = Bytes::new(env);
+        payload.append(&issuer.clone().to_xdr(env));
+        payload.append(&subject.clone().to_xdr(env));
+        payload.append(&claim_type.clone().to_xdr(env));
+        payload.append(&timestamp.to_xdr(env));
+        Self::hash_payload(env, &payload)
+    }
+
+    pub fn generate_bridge_id(
+        env: &Env,
+        bridge: &Address,
+        subject: &Address,
+        claim_type: &String,
+        source_chain: &String,
+        source_tx: &String,
+        timestamp: u64,
+    ) -> String {
+        let mut payload = Bytes::new(env);
+        payload.append(&bridge.clone().to_xdr(env));
+        payload.append(&subject.clone().to_xdr(env));
+        payload.append(&claim_type.clone().to_xdr(env));
+        payload.append(&source_chain.clone().to_xdr(env));
+        payload.append(&source_tx.clone().to_xdr(env));
+        payload.append(&timestamp.to_xdr(env));
+        Self::hash_payload(env, &payload)
     }
 
     pub fn get_status(&self, current_time: u64) -> AttestationStatus {

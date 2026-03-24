@@ -2,10 +2,31 @@
 
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{Address as _, Events as _, Ledger},
     token::{StellarAssetClient, TokenClient},
     Address, Env, String,
 };
+
+#[contract]
+struct MockBridgeContract;
+
+#[contractimpl]
+impl MockBridgeContract {
+    pub fn bridge_claim(
+        env: Env,
+        trustlink_contract: Address,
+        subject: Address,
+        claim_type: String,
+        source_chain: String,
+        source_tx: String,
+    ) -> String {
+        let client = TrustLinkContractClient::new(&env, &trustlink_contract);
+        let bridge = env.current_contract_address();
+
+        client.bridge_attestation(&bridge, &subject, &claim_type, &source_chain, &source_tx)
+    }
+}
 
 fn create_test_contract(env: &Env) -> (Address, TrustLinkContractClient<'_>) {
     let contract_id = env.register_contract(None, TrustLinkContract);
@@ -25,6 +46,12 @@ fn setup(env: &Env) -> (Address, Address, TrustLinkContractClient<'_>) {
 fn register_test_token(env: &Env, admin: &Address) -> Address {
     env.register_stellar_asset_contract_v2(admin.clone())
         .address()
+}
+
+fn register_bridge_contract(env: &Env) -> (Address, MockBridgeContractClient<'_>) {
+    let contract_id = env.register_contract(None, MockBridgeContract);
+    let client = MockBridgeContractClient::new(env, &contract_id);
+    (contract_id, client)
 }
 
 #[test]
@@ -49,6 +76,22 @@ fn test_register_and_remove_issuer() {
 
     client.remove_issuer(&admin, &issuer);
     assert!(!client.is_issuer(&issuer));
+}
+
+#[test]
+fn test_register_bridge_is_admin_only() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, _, client) = setup(&env);
+    let wrong_admin = Address::generate(&env);
+    let bridge = Address::generate(&env);
+
+    let denied = client.try_register_bridge(&wrong_admin, &bridge);
+    assert_eq!(denied, Err(Ok(types::Error::Unauthorized)));
+
+    client.register_bridge(&admin, &bridge);
+    assert!(client.is_bridge(&bridge));
 }
 
 #[test]
@@ -304,6 +347,112 @@ fn test_import_attestation_preserves_historical_timestamp_and_marks_imported() {
     assert_eq!(attestation.expiration, Some(10_000));
     assert_eq!(attestation.metadata, None);
     assert!(attestation.imported);
+}
+
+#[test]
+fn test_bridge_attestation_requires_registered_bridge() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, client) = create_test_contract(&env);
+    let admin = Address::generate(&env);
+    let bridge = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let source_chain = String::from_str(&env, "ethereum");
+    let source_tx = String::from_str(&env, "0xabc123");
+
+    client.initialize(&admin);
+
+    let result =
+        client.try_bridge_attestation(&bridge, &subject, &claim_type, &source_chain, &source_tx);
+
+    assert_eq!(result, Err(Ok(types::Error::Unauthorized)));
+}
+
+#[test]
+fn test_bridge_attestation_stores_source_reference_and_marks_bridged() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, _, client) = setup(&env);
+    let bridge = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let source_chain = String::from_str(&env, "ethereum");
+    let source_tx = String::from_str(&env, "0xabc123");
+
+    client.register_bridge(&admin, &bridge);
+    let id = client.bridge_attestation(&bridge, &subject, &claim_type, &source_chain, &source_tx);
+
+    let attestation = client.get_attestation(&id);
+    assert_eq!(attestation.issuer, bridge);
+    assert!(attestation.bridged);
+    assert!(!attestation.imported);
+    assert_eq!(attestation.source_chain, Some(source_chain));
+    assert_eq!(attestation.source_tx, Some(source_tx));
+}
+
+#[test]
+fn test_bridge_attestation_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, _, client) = setup(&env);
+    let bridge = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let source_chain = String::from_str(&env, "ethereum");
+    let source_tx = String::from_str(&env, "0xabc123");
+
+    client.register_bridge(&admin, &bridge);
+    client.bridge_attestation(&bridge, &subject, &claim_type, &source_chain, &source_tx);
+
+    let events = env.events().all();
+    let (_, topics, data) = events.last().unwrap();
+    let topic0: soroban_sdk::Symbol =
+        soroban_sdk::TryFromVal::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    let topic1: Address =
+        soroban_sdk::TryFromVal::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
+    let event_data: (String, Address, String, String, String) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(topic0, soroban_sdk::symbol_short!("bridged"));
+    assert_eq!(topic1, subject);
+    assert_eq!(event_data.1, bridge);
+    assert_eq!(event_data.3, source_chain);
+    assert_eq!(event_data.4, source_tx);
+}
+
+#[test]
+fn test_bridge_contract_can_create_attestation() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let (trustlink_id, client) = create_test_contract(&env);
+    let (bridge_id, bridge_client) = register_bridge_contract(&env);
+    let admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let source_chain = String::from_str(&env, "ethereum");
+    let source_tx = String::from_str(&env, "0xdef456");
+
+    client.initialize(&admin);
+    client.register_bridge(&admin, &bridge_id);
+
+    let id = bridge_client.bridge_claim(
+        &trustlink_id,
+        &subject,
+        &claim_type,
+        &source_chain,
+        &source_tx,
+    );
+
+    let attestation = client.get_attestation(&id);
+    assert!(client.has_valid_claim(&subject, &claim_type));
+    assert_eq!(client.get_subject_attestations(&subject, &0, &10).len(), 1);
+    assert_eq!(attestation.issuer, bridge_id);
+    assert!(attestation.bridged);
 }
 
 #[test]

@@ -153,6 +153,17 @@ impl TrustLinkContract {
         Ok(())
     }
 
+    pub fn register_bridge(
+        env: Env,
+        admin: Address,
+        bridge_contract: Address,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        Validation::require_admin(&env, &admin)?;
+        Storage::add_bridge(&env, &bridge_contract);
+        Ok(())
+    }
+
     pub fn set_fee(
         env: Env,
         admin: Address,
@@ -210,6 +221,9 @@ impl TrustLinkContract {
             metadata,
             valid_from: None,
             imported: false,
+            bridged: false,
+            source_chain: None,
+            source_tx: None,
         };
 
         store_attestation(&env, &attestation);
@@ -249,10 +263,60 @@ impl TrustLinkContract {
             metadata: None,
             valid_from: None,
             imported: true,
+            bridged: false,
+            source_chain: None,
+            source_tx: None,
         };
 
         store_attestation(&env, &attestation);
         Events::attestation_imported(&env, &attestation);
+        Ok(attestation_id)
+    }
+
+    pub fn bridge_attestation(
+        env: Env,
+        bridge: Address,
+        subject: Address,
+        claim_type: String,
+        source_chain: String,
+        source_tx: String,
+    ) -> Result<String, Error> {
+        bridge.require_auth();
+        Validation::require_bridge(&env, &bridge)?;
+
+        let timestamp = env.ledger().timestamp();
+        let attestation_id = Attestation::generate_bridge_id(
+            &env,
+            &bridge,
+            &subject,
+            &claim_type,
+            &source_chain,
+            &source_tx,
+            timestamp,
+        );
+
+        if Storage::has_attestation(&env, &attestation_id) {
+            return Err(Error::DuplicateAttestation);
+        }
+
+        let attestation = Attestation {
+            id: attestation_id.clone(),
+            issuer: bridge,
+            subject,
+            claim_type,
+            timestamp,
+            expiration: None,
+            revoked: false,
+            metadata: None,
+            valid_from: None,
+            imported: false,
+            bridged: true,
+            source_chain: Some(source_chain),
+            source_tx: Some(source_tx),
+        };
+
+        store_attestation(&env, &attestation);
+        Events::attestation_bridged(&env, &attestation);
         Ok(attestation_id)
     }
 
@@ -289,6 +353,9 @@ impl TrustLinkContract {
                 metadata: None,
                 valid_from: None,
                 imported: false,
+                bridged: false,
+                source_chain: None,
+                source_tx: None,
             };
 
             store_attestation(&env, &attestation);
@@ -568,6 +635,10 @@ impl TrustLinkContract {
 
     pub fn is_issuer(env: Env, address: Address) -> bool {
         Storage::is_issuer(&env, &address)
+    }
+
+    pub fn is_bridge(env: Env, address: Address) -> bool {
+        Storage::is_bridge(&env, &address)
     }
 
     pub fn set_issuer_metadata(

@@ -11,6 +11,8 @@
 //!   been set up yet, or [`Error::Unauthorized`] if the addresses differ.
 //! - [`Validation::require_issuer`] — verifies the caller is present in the
 //!   issuer registry. Returns [`Error::Unauthorized`] if not registered.
+//! - [`Validation::require_bridge`] — verifies the caller is present in the
+//!   bridge registry. Returns [`Error::Unauthorized`] if not registered.
 
 use crate::storage::Storage;
 use crate::types::Error;
@@ -39,6 +41,17 @@ impl Validation {
     /// - [`Error::Unauthorized`] — `caller` is not in the issuer registry.
     pub fn require_issuer(env: &Env, caller: &Address) -> Result<(), Error> {
         if !Storage::is_issuer(env, caller) {
+            return Err(Error::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Assert that `caller` is a registered bridge contract.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — `caller` is not in the bridge registry.
+    pub fn require_bridge(env: &Env, caller: &Address) -> Result<(), Error> {
+        if !Storage::is_bridge(env, caller) {
             return Err(Error::Unauthorized);
         }
         Ok(())

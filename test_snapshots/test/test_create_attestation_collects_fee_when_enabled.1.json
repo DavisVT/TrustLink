@@ -256,7 +256,7 @@
                   "symbol": "Attestation"
                 },
                 {
-                  "string": "b03c0e9e82bd52278107368ba661e052"
+                  "string": "d589a0d5e1193ce98a615444e6a69be7"
                 }
               ]
             },
@@ -276,13 +276,21 @@
                       "symbol": "Attestation"
                     },
                     {
-                      "string": "b03c0e9e82bd52278107368ba661e052"
+                      "string": "d589a0d5e1193ce98a615444e6a69be7"
                     }
                   ]
                 },
                 "durability": "persistent",
                 "val": {
                   "map": [
+                    {
+                      "key": {
+                        "symbol": "bridged"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
                     {
                       "key": {
                         "symbol": "claim_type"
@@ -302,7 +310,7 @@
                         "symbol": "id"
                       },
                       "val": {
-                        "string": "b03c0e9e82bd52278107368ba661e052"
+                        "string": "d589a0d5e1193ce98a615444e6a69be7"
                       }
                     },
                     {
@@ -334,6 +342,18 @@
                       "val": {
                         "bool": false
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "source_chain"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "source_tx"
+                      },
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -449,7 +469,7 @@
                 "val": {
                   "vec": [
                     {
-                      "string": "b03c0e9e82bd52278107368ba661e052"
+                      "string": "d589a0d5e1193ce98a615444e6a69be7"
                     }
                   ]
                 }
@@ -498,7 +518,7 @@
                 "val": {
                   "vec": [
                     {
-                      "string": "b03c0e9e82bd52278107368ba661e052"
+                      "string": "d589a0d5e1193ce98a615444e6a69be7"
                     }
                   ]
                 }
@@ -1624,7 +1644,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "b03c0e9e82bd52278107368ba661e052"
+                  "string": "d589a0d5e1193ce98a615444e6a69be7"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -1659,7 +1679,7 @@
               }
             ],
             "data": {
-              "string": "b03c0e9e82bd52278107368ba661e052"
+              "string": "d589a0d5e1193ce98a615444e6a69be7"
             }
           }
         }
@@ -1789,7 +1809,7 @@
               }
             ],
             "data": {
-              "string": "b03c0e9e82bd52278107368ba661e052"
+              "string": "d589a0d5e1193ce98a615444e6a69be7"
             }
           }
         }
@@ -1815,6 +1835,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "bridged"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "claim_type"
                   },
                   "val": {
@@ -1832,7 +1860,7 @@
                     "symbol": "id"
                   },
                   "val": {
-                    "string": "b03c0e9e82bd52278107368ba661e052"
+                    "string": "d589a0d5e1193ce98a615444e6a69be7"
                   }
                 },
                 {
@@ -1864,6 +1892,18 @@
                   "val": {
                     "bool": false
                   }
+                },
+                {
+                  "key": {
+                    "symbol": "source_chain"
+                  },
+                  "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "source_tx"
+                  },
+                  "val": "void"
                 },
                 {
                   "key": {

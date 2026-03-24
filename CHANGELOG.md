@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `set_fee(admin, fee, collector, fee_token)` and `get_fee_config()` for configuring attestation creation fees.
 - `FeeConfig` storage with fee disabled by default and collector defaulting to the admin.
 - Fee-enforced `create_attestation` flow that transfers the configured token amount to the fee collector before persisting the attestation.
+- `register_bridge(admin, bridge_contract)`, `is_bridge(address)`, and `bridge_attestation(bridge, subject, claim_type, source_chain, source_tx)` for trusted cross-chain attestation mirroring.
+- `Attestation.bridged`, `Attestation.source_chain`, and `Attestation.source_tx` so bridged attestations preserve origin metadata on-chain.
+- `bridged` event for auditable bridge-origin attestation creation.
 
 <!-- Add new changes here before they are released. Use the categories below:
 ### Added

@@ -36,6 +36,25 @@ impl Events {
         );
     }
 
+    pub fn attestation_bridged(env: &Env, attestation: &Attestation) {
+        env.events().publish(
+            (symbol_short!("bridged"), attestation.subject.clone()),
+            (
+                attestation.id.clone(),
+                attestation.issuer.clone(),
+                attestation.claim_type.clone(),
+                attestation
+                    .source_chain
+                    .clone()
+                    .unwrap_or(String::from_str(env, "")),
+                attestation
+                    .source_tx
+                    .clone()
+                    .unwrap_or(String::from_str(env, "")),
+            ),
+        );
+    }
+
     pub fn attestation_revoked(env: &Env, attestation_id: &String, issuer: &Address) {
         env.events().publish(
             (symbol_short!("revoked"), issuer.clone()),

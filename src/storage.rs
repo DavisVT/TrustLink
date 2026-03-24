@@ -15,6 +15,7 @@
 //! - `Admin` — the single contract administrator address.
 //! - `Version` — semver string set at initialization (e.g. `"1.0.0"`).
 //! - `Issuer(Address)` — presence flag (`bool`) for each registered issuer.
+//! - `Bridge(Address)` — presence flag (`bool`) for each registered bridge contract.
 //! - `Attestation(String)` — full [`Attestation`] record keyed by its ID.
 //! - `SubjectAttestations(Address)` — ordered `Vec<String>` of attestation IDs
 //!   for a given subject; used for pagination and claim lookups.
@@ -40,6 +41,8 @@ pub enum StorageKey {
     FeeConfig,
     /// Presence flag for a registered issuer.
     Issuer(Address),
+    /// Presence flag for a registered bridge contract.
+    Bridge(Address),
     /// Full [`Attestation`] record keyed by its ID.
     Attestation(String),
     /// Ordered list of attestation IDs for a subject address.
@@ -125,6 +128,22 @@ impl Storage {
     /// Add `issuer` to the registry and refresh its TTL.
     pub fn add_issuer(env: &Env, issuer: &Address) {
         let key = StorageKey::Issuer(issuer.clone());
+        env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, INSTANCE_LIFETIME, INSTANCE_LIFETIME);
+    }
+
+    /// Return `true` if `address` is in the bridge registry.
+    pub fn is_bridge(env: &Env, address: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::Bridge(address.clone()))
+    }
+
+    /// Add `bridge` to the registry and refresh its TTL.
+    pub fn add_bridge(env: &Env, bridge: &Address) {
+        let key = StorageKey::Bridge(bridge.clone());
         env.storage().persistent().set(&key, &true);
         env.storage()
             .persistent()

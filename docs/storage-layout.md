@@ -134,14 +134,35 @@ bool   // always true
 
 ---
 
-### 5. `Attestation(String)`
+### 5. `Bridge(Address)`
+
+| Property      | Value                                              |
+|---------------|----------------------------------------------------|
+| Tier          | Persistent                                         |
+| TTL           | Per-key, 30 days, refreshed on `add_bridge`        |
+| Value type    | `bool` (always `true` when present)                |
+| Written by    | `register_bridge`                                  |
+| Read by       | `is_bridge`, `Validation::require_bridge`          |
+
+One entry exists per trusted bridge contract. The key embeds the bridge
+contract `Address` as a parameter. Presence of the key means the contract is
+allowed to create bridged attestations; absence means it is not.
+
+**Rust type:**
+```rust
+bool   // always true
+```
+
+---
+
+### 6. `Attestation(String)`
 
 | Property      | Value                                                    |
 |---------------|----------------------------------------------------------|
 | Tier          | Persistent                                               |
 | TTL           | Per-key, 30 days, refreshed on every `set_attestation`   |
 | Value type    | `Attestation` struct                                     |
-| Written by    | `create_attestation`, `import_attestation`, `revoke_attestation`, `renew_attestation`, `update_expiration`, `revoke_attestations_batch` |
+| Written by    | `create_attestation`, `import_attestation`, `bridge_attestation`, `revoke_attestation`, `renew_attestation`, `update_expiration`, `revoke_attestations_batch` |
 | Read by       | `get_attestation`, `get_attestation_status`, `has_valid_claim`, `has_any_claim`, `has_all_claims`, `get_valid_claims`, `get_attestation_by_type` |
 
 The primary attestation record. The key parameter is the 32-character hex
@@ -161,6 +182,9 @@ pub struct Attestation {
     pub metadata:    Option<String>,  // optional issuer-supplied metadata
     pub valid_from:  Option<u64>,     // optional future activation time (seconds)
     pub imported:    bool,            // true when imported from an external source
+    pub bridged:     bool,            // true when created by a bridge contract
+    pub source_chain: Option<String>, // original chain for bridged attestations
+    pub source_tx:   Option<String>,  // original transaction/reference for bridged attestations
 }
 ```
 
@@ -177,14 +201,14 @@ Priority order: `Pending` > `Revoked` > `Expired` > `Valid`.
 
 ---
 
-### 6. `SubjectAttestations(Address)`
+### 7. `SubjectAttestations(Address)`
 
 | Property      | Value                                                        |
 |---------------|--------------------------------------------------------------|
 | Tier          | Persistent                                                   |
 | TTL           | Per-key, 30 days, refreshed on every `add_subject_attestation` |
 | Value type    | `Vec<String>` — ordered list of attestation IDs             |
-| Written by    | `create_attestation`, `import_attestation`                    |
+| Written by    | `create_attestation`, `import_attestation`, `bridge_attestation` |
 | Read by       | `get_subject_attestations`, `has_valid_claim`, `has_any_claim`, `has_all_claims`, `get_valid_claims`, `get_attestation_by_type` |
 
 An append-only index mapping a subject address to all attestation IDs ever
@@ -199,19 +223,21 @@ Vec<String>   // ordered list of 32-char hex attestation IDs
 
 ---
 
-### 7. `IssuerAttestations(Address)`
+### 8. `IssuerAttestations(Address)`
 
 | Property      | Value                                                       |
 |---------------|-------------------------------------------------------------|
 | Tier          | Persistent                                                  |
 | TTL           | Per-key, 30 days, refreshed on every `add_issuer_attestation` |
 | Value type    | `Vec<String>` — ordered list of attestation IDs            |
-| Written by    | `create_attestation`, `import_attestation`                 |
+| Written by    | `create_attestation`, `import_attestation`, `bridge_attestation` |
 | Read by       | `get_issuer_attestations`                                   |
 
-An append-only index mapping an issuer address to all attestation IDs that
-issuer has ever created. Used for pagination via `get_issuer_attestations`.
-IDs appear in insertion order.
+An append-only index mapping an attestation creator address to all attestation
+IDs that address has ever created. For native/imported attestations this is the
+issuer address; for bridged attestations this is the bridge contract address.
+Used for pagination via `get_issuer_attestations`. IDs appear in insertion
+order.
 
 **Rust type:**
 ```rust
@@ -220,7 +246,7 @@ Vec<String>   // ordered list of 32-char hex attestation IDs
 
 ---
 
-### 8. `IssuerMetadata(Address)`
+### 9. `IssuerMetadata(Address)`
 
 | Property      | Value                                                    |
 |---------------|----------------------------------------------------------|
@@ -245,7 +271,7 @@ pub struct IssuerMetadata {
 
 ---
 
-### 9. `ClaimType(String)`
+### 10. `ClaimType(String)`
 
 | Property      | Value                                                  |
 |---------------|--------------------------------------------------------|
@@ -270,7 +296,7 @@ pub struct ClaimTypeInfo {
 
 ---
 
-### 10. `ClaimTypeList`
+### 11. `ClaimTypeList`
 
 | Property      | Value                                                      |
 |---------------|------------------------------------------------------------|
@@ -298,7 +324,9 @@ Vec<String>   // ordered list of claim type identifier strings
 |------------------------------|------------|---------------------|------------|---------------------|
 | `Admin`                      | Instance   | `Address`           | 30 days    | Yes (shared)        |
 | `Version`                    | Instance   | `String`            | 30 days    | Yes (shared)        |
+| `FeeConfig`                  | Instance   | `FeeConfig`         | 30 days    | Yes (shared)        |
 | `Issuer(Address)`            | Persistent | `bool`              | 30 days    | Yes (per-key)       |
+| `Bridge(Address)`            | Persistent | `bool`              | 30 days    | Yes (per-key)       |
 | `Attestation(String)`        | Persistent | `Attestation`       | 30 days    | Yes (per-key)       |
 | `SubjectAttestations(Address)`| Persistent | `Vec<String>`      | 30 days    | Yes (per-key)       |
 | `IssuerAttestations(Address)`| Persistent | `Vec<String>`       | 30 days    | Yes (per-key)       |

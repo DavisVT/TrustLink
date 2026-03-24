@@ -1,6 +1,6 @@
 # TrustLink - On-Chain Attestation & Verification System
 
-TrustLink is a Soroban smart contract that provides a reusable trust layer for the Stellar blockchain. It enables trusted issuers (anchors, fintech apps, institutions) to create, import, manage, and revoke attestations about wallet addresses, allowing other contracts and applications to verify claims before executing financial operations.
+TrustLink is a Soroban smart contract that provides a reusable trust layer for the Stellar blockchain. It enables trusted issuers, bridge contracts, and administrators to create, import, manage, and revoke attestations about wallet addresses, allowing other contracts and applications to verify claims before executing financial operations.
 
 ## Overview
 
@@ -13,6 +13,7 @@ TrustLink solves the problem of decentralized identity verification and trust es
 - **Flexible Claims**: Support for any claim type (KYC_PASSED, ACCREDITED_INVESTOR, MERCHANT_VERIFIED, etc.)
 - **Expiration Support**: Optional time-based expiration for attestations
 - **Historical Import**: Admin can import externally verified attestations with original timestamps
+- **Cross-Chain Bridge Support**: Trusted bridge contracts can bring attestations from other chains on-chain
 - **Configurable Fees**: Admin can require a token-denominated fee for native attestation creation
 - **Revocation**: Issuers can revoke attestations at any time
 - **Deterministic IDs**: Attestations have unique, reproducible identifiers
@@ -47,7 +48,10 @@ src/
     expiration: Option<u64>,  // Optional expiration time
     revoked: bool,            // Revocation status
     metadata: Option<String>, // Optional issuer-supplied metadata
-    imported: bool            // True when migrated from an external source
+    imported: bool,           // True when migrated from an external source
+    bridged: bool,            // True when created by a trusted bridge contract
+    source_chain: Option<String>, // Chain where the original attestation exists
+    source_tx: Option<String> // Source transaction or reference
 }
 ```
 
@@ -55,6 +59,7 @@ src/
 - `Admin`: Contract administrator address
 - `FeeConfig`: Global attestation fee settings
 - `Issuer(Address)`: Authorized issuer registry
+- `Bridge(Address)`: Authorized bridge contract registry
 - `Attestation(String)`: Individual attestation data
 - `SubjectAttestations(Address)`: Index of attestations per subject
 - `IssuerAttestations(Address)`: Index of attestations per issuer
@@ -102,6 +107,16 @@ contract.register_issuer(&admin, &issuer_address);
 
 // Check if address is authorized
 let is_authorized = contract.is_issuer(&issuer_address);
+```
+
+### Register Bridge Contracts
+
+Bridge contracts use a separate trust registry from regular issuers.
+
+```rust
+contract.register_bridge(&admin, &bridge_contract_address);
+
+let is_bridge = contract.is_bridge(&bridge_contract_address);
 ```
 
 ### Claim Type Registry
@@ -178,6 +193,27 @@ let imported_id = contract.import_attestation(
 let attestation = contract.get_attestation(&imported_id);
 assert!(attestation.imported);
 assert_eq!(attestation.timestamp, historical_timestamp);
+```
+
+### Bridge Cross-Chain Attestations
+
+Use this when a trusted bridge contract is mirroring an attestation that was
+verified on another chain. The bridge contract becomes the on-chain attestation
+creator, while the original source is preserved on the record.
+
+```rust
+let bridged_id = contract.bridge_attestation(
+    &bridge_contract_address,
+    &user_address,
+    &String::from_str(&env, "KYC_PASSED"),
+    &String::from_str(&env, "ethereum"),
+    &String::from_str(&env, "0xabc123"),
+);
+
+let attestation = contract.get_attestation(&bridged_id);
+assert!(attestation.bridged);
+assert_eq!(attestation.source_chain, Some(String::from_str(&env, "ethereum")));
+assert_eq!(attestation.source_tx, Some(String::from_str(&env, "0xabc123")));
 ```
 
 ### Verify Claims

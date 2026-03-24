@@ -133,7 +133,7 @@
                   "symbol": "Attestation"
                 },
                 {
-                  "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                  "string": "189747b95e6d43583b8340cf0734bf92"
                 }
               ]
             },
@@ -153,13 +153,21 @@
                       "symbol": "Attestation"
                     },
                     {
-                      "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                      "string": "189747b95e6d43583b8340cf0734bf92"
                     }
                   ]
                 },
                 "durability": "persistent",
                 "val": {
                   "map": [
+                    {
+                      "key": {
+                        "symbol": "bridged"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
                     {
                       "key": {
                         "symbol": "claim_type"
@@ -179,7 +187,7 @@
                         "symbol": "id"
                       },
                       "val": {
-                        "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                        "string": "189747b95e6d43583b8340cf0734bf92"
                       }
                     },
                     {
@@ -211,6 +219,18 @@
                       "val": {
                         "bool": false
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "source_chain"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "source_tx"
+                      },
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -326,7 +346,7 @@
                 "val": {
                   "vec": [
                     {
-                      "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                      "string": "189747b95e6d43583b8340cf0734bf92"
                     }
                   ]
                 }
@@ -375,7 +395,7 @@
                 "val": {
                   "vec": [
                     {
-                      "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                      "string": "189747b95e6d43583b8340cf0734bf92"
                     }
                   ]
                 }
@@ -1126,7 +1146,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "dba739956a6e13a0b28ff71b2d584ddb"
+                  "string": "189747b95e6d43583b8340cf0734bf92"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
@@ -1161,7 +1181,7 @@
               }
             ],
             "data": {
-              "string": "dba739956a6e13a0b28ff71b2d584ddb"
+              "string": "189747b95e6d43583b8340cf0734bf92"
             }
           }
         }
