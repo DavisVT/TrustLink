@@ -1173,3 +1173,166 @@ fn test_id_no_collisions_across_100_combinations() {
 
     assert_eq!(ids.len(), 100);
 }
+
+// ── Pagination edge cases ────────────────────────────────────────────────────
+
+fn setup_with_n_attestations(env: &Env, n: u32) -> (Address, Address, TrustLinkContractClient<'_>) {
+    let (admin, issuer, client) = setup(env);
+    for _ in 0..n {
+        let subject = Address::generate(env);
+        client.create_attestation(
+            &issuer,
+            &subject,
+            &String::from_str(env, "KYC_PASSED"),
+            &None,
+            &None,
+            &None,
+        );
+    }
+    (admin, issuer, client)
+}
+
+fn create_n_attestations_for_subject(
+    env: &Env,
+    client: &TrustLinkContractClient<'_>,
+    issuer: &Address,
+    subject: &Address,
+    n: u32,
+) {
+    for _ in 0..n {
+        client.create_attestation(
+            issuer,
+            subject,
+            &String::from_str(env, "KYC_PASSED"),
+            &None,
+            &None,
+            &None,
+        );
+        // advance ledger time so each attestation gets a unique timestamp / ID
+        env.ledger().with_mut(|l| l.timestamp += 1);
+    }
+}
+
+// ── get_subject_attestations ─────────────────────────────────────────────────
+
+#[test]
+fn test_subject_pagination_zero_attestations() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    // subject has no attestations
+    assert_eq!(client.get_subject_attestations(&subject, &0, &10).len(), 0);
+}
+
+#[test]
+fn test_subject_pagination_one_attestation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 1);
+    assert_eq!(client.get_subject_attestations(&subject, &0, &10).len(), 1);
+}
+
+#[test]
+fn test_subject_pagination_limit_zero_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 3);
+    assert_eq!(client.get_subject_attestations(&subject, &0, &0).len(), 0);
+}
+
+#[test]
+fn test_subject_pagination_start_beyond_total_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 3);
+    assert_eq!(client.get_subject_attestations(&subject, &10, &5).len(), 0);
+}
+
+#[test]
+fn test_subject_pagination_start_plus_limit_exceeds_total_returns_remaining() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 5);
+    // start=3, limit=10 → only 2 items remain
+    assert_eq!(client.get_subject_attestations(&subject, &3, &10).len(), 2);
+}
+
+#[test]
+fn test_subject_pagination_limit_one_returns_exactly_one() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 5);
+    assert_eq!(client.get_subject_attestations(&subject, &0, &1).len(), 1);
+}
+
+// ── get_issuer_attestations ──────────────────────────────────────────────────
+
+#[test]
+fn test_issuer_pagination_zero_attestations() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    assert_eq!(client.get_issuer_attestations(&issuer, &0, &10).len(), 0);
+}
+
+#[test]
+fn test_issuer_pagination_one_attestation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 1);
+    assert_eq!(client.get_issuer_attestations(&issuer, &0, &10).len(), 1);
+}
+
+#[test]
+fn test_issuer_pagination_limit_zero_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 3);
+    assert_eq!(client.get_issuer_attestations(&issuer, &0, &0).len(), 0);
+}
+
+#[test]
+fn test_issuer_pagination_start_beyond_total_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 3);
+    assert_eq!(client.get_issuer_attestations(&issuer, &10, &5).len(), 0);
+}
+
+#[test]
+fn test_issuer_pagination_start_plus_limit_exceeds_total_returns_remaining() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 5);
+    // start=3, limit=10 → only 2 items remain
+    assert_eq!(client.get_issuer_attestations(&issuer, &3, &10).len(), 2);
+}
+
+#[test]
+fn test_issuer_pagination_limit_one_returns_exactly_one() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    create_n_attestations_for_subject(&env, &client, &issuer, &subject, 5);
+    assert_eq!(client.get_issuer_attestations(&issuer, &0, &1).len(), 1);
+}
