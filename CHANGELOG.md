@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `register_bridge(admin, bridge_contract)`, `is_bridge(address)`, and `bridge_attestation(bridge, subject, claim_type, source_chain, source_tx)` for trusted cross-chain attestation mirroring.
 - `Attestation.bridged`, `Attestation.source_chain`, and `Attestation.source_tx` so bridged attestations preserve origin metadata on-chain.
 - `bridged` event for auditable bridge-origin attestation creation.
+- `Attestation::generate_id` and `Attestation::generate_bridge_id` now carry a stability guarantee: both functions produce byte-for-byte identical output for the same inputs across all Soroban environment versions. The guarantee is enforced by the `test_generate_id_stability` regression test, which hard-codes known input tuples and their expected SHA-256 hex digests and will fail immediately if the hashing algorithm, XDR serialization order, or hex-encoding logic ever changes.
 
 <!-- Add new changes here before they are released. Use the categories below:
 ### Added
