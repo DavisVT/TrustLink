@@ -685,6 +685,58 @@ For a step-by-step walkthrough covering Rust cross-contract patterns, JavaScript
 
 For a full reference of every on-chain storage key, the data each holds, TTL policy, serialization format, and a practical RPC read example for indexer developers, see [docs/storage-layout.md](docs/storage-layout.md).
 
+## FAQ
+
+### How do I verify an attestation in my contract?
+
+Use `has_valid_claim(subject, claim_type)` for a single claim, `has_valid_claim_from_issuer` to restrict to a specific issuer, `has_any_claim` for OR-logic across multiple claim types, or `has_all_claims` for AND-logic. All four functions automatically exclude revoked and expired attestations.
+
+```rust
+let trustlink = trustlink::Client::new(&env, &trustlink_contract);
+
+// Single claim
+let has_kyc = trustlink.has_valid_claim(&user, &String::from_str(&env, "KYC_PASSED"));
+
+// All of multiple claims
+let all_clear = trustlink.has_all_claims(&user, &vec![&env,
+    String::from_str(&env, "KYC_PASSED"),
+    String::from_str(&env, "AML_CLEARED"),
+]);
+```
+
+### What happens when an issuer is removed?
+
+Calling `remove_issuer` removes the issuer from the authorized registry, preventing them from creating new attestations. Existing attestations issued by that address are **not** deleted — they remain on-chain and are still queryable. Downstream contracts that check `has_valid_claim` will continue to see those attestations as valid until they expire or are revoked.
+
+### Can a subject dispute an attestation?
+
+No. TrustLink has no dispute mechanism. Attestations are fully issuer-controlled — only the issuer who created an attestation can revoke it via `revoke_attestation`. Subjects have no ability to remove or contest attestations made about them.
+
+### How are attestation IDs generated?
+
+IDs are SHA-256 hashes encoded as 32-character hex strings. For standard attestations the hash input is `(issuer_address || subject_address || claim_type || timestamp)`. For bridge attestations, `source_chain` and `source_tx` are also included in the hash, ensuring uniqueness across chains.
+
+### What is the cost of creating an attestation?
+
+Fees are disabled by default (`attestation_fee = 0`). An admin can enable fees via `set_fee`, after which the issuer pays the configured token amount to the fee collector on each `create_attestation` call. Query `get_fee_config()` to check the current settings before creating attestations.
+
+```rust
+let fee_config = contract.get_fee_config();
+// fee_config.attestation_fee == 0 means fees are disabled
+```
+
+### How do I handle expired attestations?
+
+`has_valid_claim` and all related query functions automatically exclude expired attestations, so no manual filtering is needed. To check the status of a specific attestation use `get_attestation_status`, which returns `Expired` for past-deadline records. To proactively find attestations nearing expiry, use `get_expiring_attestations(subject, within_seconds)` or `get_issuer_expiring_attestations(issuer, within_seconds)`. Issuers can extend an attestation's lifetime with `renew_attestation`.
+
+```rust
+// Find attestations expiring within the next 7 days
+let expiring = contract.get_expiring_attestations(&user, &(7 * 24 * 60 * 60));
+
+// Renew one
+contract.renew_attestation(&issuer, &attestation_id, &new_expiration);
+```
+
 ## License
 
 MIT
