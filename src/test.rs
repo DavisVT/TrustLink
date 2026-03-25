@@ -978,3 +978,175 @@ fn test_multisig_unregistered_proposer_rejected() {
         client.try_propose_attestation(&unregistered, &subject, &claim_type, &required, &2);
     assert_eq!(result, Err(Ok(types::Error::Unauthorized)));
 }
+
+// ── Endorsement tests ────────────────────────────────────────────────────────
+
+fn setup_two_issuers(env: &Env) -> (Address, Address, Address, TrustLinkContractClient<'_>) {
+    let (_, client) = create_test_contract(env);
+    let admin = Address::generate(env);
+    let issuer1 = Address::generate(env);
+    let issuer2 = Address::generate(env);
+    client.initialize(&admin, &None);
+    client.register_issuer(&admin, &issuer1);
+    client.register_issuer(&admin, &issuer2);
+    (admin, issuer1, issuer2, client)
+}
+
+#[test]
+fn test_endorse_attestation_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    client.endorse_attestation(&issuer2, &attestation_id);
+
+    assert_eq!(client.get_endorsement_count(&attestation_id), 1);
+    let endorsements = client.get_endorsements(&attestation_id);
+    assert_eq!(endorsements.len(), 1);
+    assert_eq!(endorsements.get(0).unwrap().endorser, issuer2);
+    assert_eq!(endorsements.get(0).unwrap().attestation_id, attestation_id);
+}
+
+#[test]
+fn test_endorse_attestation_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let timestamp = 1_000_000u64;
+    env.ledger().set_timestamp(timestamp);
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    client.endorse_attestation(&issuer2, &attestation_id);
+
+    let events = env.events().all();
+    let mut found = false;
+    for (_, topics, _) in events.iter() {
+        let topic0: soroban_sdk::Symbol =
+            soroban_sdk::TryFromVal::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        if topic0 == soroban_sdk::symbol_short!("endorsed") {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "endorsed event not emitted");
+}
+
+#[test]
+fn test_endorse_attestation_unregistered_issuer_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, _issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let unregistered = Address::generate(&env);
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    let result = client.try_endorse_attestation(&unregistered, &attestation_id);
+    assert_eq!(result, Err(Ok(types::Error::Unauthorized)));
+}
+
+#[test]
+fn test_endorse_attestation_cannot_endorse_own() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, _issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    let result = client.try_endorse_attestation(&issuer1, &attestation_id);
+    assert_eq!(result, Err(Ok(types::Error::CannotEndorseOwn)));
+}
+
+#[test]
+fn test_endorse_attestation_cannot_endorse_revoked() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    client.revoke_attestation(&issuer1, &attestation_id);
+
+    let result = client.try_endorse_attestation(&issuer2, &attestation_id);
+    assert_eq!(result, Err(Ok(types::Error::AlreadyRevoked)));
+}
+
+#[test]
+fn test_endorse_attestation_duplicate_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    client.endorse_attestation(&issuer2, &attestation_id);
+
+    let result = client.try_endorse_attestation(&issuer2, &attestation_id);
+    assert_eq!(result, Err(Ok(types::Error::AlreadyEndorsed)));
+}
+
+#[test]
+fn test_endorse_attestation_multiple_endorsers() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, issuer1, issuer2, client) = setup_two_issuers(&env);
+    let issuer3 = Address::generate(&env);
+    client.register_issuer(&admin, &issuer3);
+
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    client.endorse_attestation(&issuer2, &attestation_id);
+    client.endorse_attestation(&issuer3, &attestation_id);
+
+    assert_eq!(client.get_endorsement_count(&attestation_id), 2);
+    let endorsements = client.get_endorsements(&attestation_id);
+    assert_eq!(endorsements.get(0).unwrap().endorser, issuer2);
+    assert_eq!(endorsements.get(1).unwrap().endorser, issuer3);
+}
+
+#[test]
+fn test_get_endorsements_empty_for_new_attestation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, issuer1, _issuer2, client) = setup_two_issuers(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let attestation_id =
+        client.create_attestation(&issuer1, &subject, &claim_type, &None, &None, &None);
+
+    assert_eq!(client.get_endorsement_count(&attestation_id), 0);
+    assert_eq!(client.get_endorsements(&attestation_id).len(), 0);
+}

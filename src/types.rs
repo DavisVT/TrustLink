@@ -70,6 +70,18 @@ pub enum AttestationStatus {
     Pending,
 }
 
+/// A social-proof endorsement of an existing attestation by a registered issuer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Endorsement {
+    /// The ID of the attestation being endorsed.
+    pub attestation_id: String,
+    /// The issuer who is endorsing the attestation.
+    pub endorser: Address,
+    /// Ledger timestamp when the endorsement was recorded.
+    pub timestamp: u64,
+}
+
 /// A multi-sig attestation proposal that becomes active once `threshold` issuers have co-signed.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +136,10 @@ pub enum Error {
     ProposalFinalized = 19,
     /// The proposal has expired without reaching threshold.
     ProposalExpired = 20,
+    /// The endorser has already endorsed this attestation.
+    AlreadyEndorsed = 21,
+    /// An issuer cannot endorse their own attestation.
+    CannotEndorseOwn = 22,
 }
 
 impl Attestation {

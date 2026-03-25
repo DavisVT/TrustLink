@@ -13,7 +13,7 @@ use soroban_sdk::{contract, contractimpl, token::TokenClient, Address, Env, Stri
 use crate::events::Events;
 use crate::storage::Storage;
 use crate::types::{
-    Attestation, AttestationStatus, ClaimTypeInfo, ContractMetadata, Error, FeeConfig,
+    Attestation, AttestationStatus, ClaimTypeInfo, ContractMetadata, Endorsement, Error, FeeConfig,
     IssuerMetadata, MultiSigProposal, TtlConfig, MULTISIG_PROPOSAL_TTL_SECS,
 };
 use crate::validation::Validation;
@@ -923,7 +923,67 @@ impl TrustLinkContract {
         Storage::get_multisig_proposal(&env, &proposal_id)
     }
 
-    pub fn get_version(env: Env) -> Result<String, Error> {        Storage::get_version(&env).ok_or(Error::NotInitialized)
+    /// Endorse an existing attestation, adding a layer of social proof.
+    ///
+    /// Only registered issuers may endorse. An issuer cannot endorse their own
+    /// attestation, and cannot endorse a revoked attestation. Each issuer may
+    /// endorse a given attestation at most once.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — endorser is not a registered issuer.
+    /// - [`Error::NotFound`] — attestation does not exist.
+    /// - [`Error::CannotEndorseOwn`] — endorser is the attestation's issuer.
+    /// - [`Error::AlreadyRevoked`] — attestation has been revoked.
+    /// - [`Error::AlreadyEndorsed`] — endorser has already endorsed this attestation.
+    pub fn endorse_attestation(
+        env: Env,
+        endorser: Address,
+        attestation_id: String,
+    ) -> Result<(), Error> {
+        endorser.require_auth();
+        Validation::require_issuer(&env, &endorser)?;
+
+        let attestation = Storage::get_attestation(&env, &attestation_id)?;
+
+        if attestation.issuer == endorser {
+            return Err(Error::CannotEndorseOwn);
+        }
+
+        if attestation.revoked {
+            return Err(Error::AlreadyRevoked);
+        }
+
+        // Prevent duplicate endorsements from the same issuer.
+        for existing in Storage::get_endorsements(&env, &attestation_id).iter() {
+            if existing.endorser == endorser {
+                return Err(Error::AlreadyEndorsed);
+            }
+        }
+
+        let timestamp = env.ledger().timestamp();
+        let endorsement = Endorsement {
+            attestation_id: attestation_id.clone(),
+            endorser: endorser.clone(),
+            timestamp,
+        };
+
+        Storage::add_endorsement(&env, &endorsement);
+        Events::attestation_endorsed(&env, &attestation_id, &endorser, timestamp);
+        Ok(())
+    }
+
+    /// Return all endorsements for the given attestation.
+    pub fn get_endorsements(env: Env, attestation_id: String) -> Vec<Endorsement> {
+        Storage::get_endorsements(&env, &attestation_id)
+    }
+
+    /// Return the number of endorsements for the given attestation.
+    pub fn get_endorsement_count(env: Env, attestation_id: String) -> u32 {
+        Storage::get_endorsements(&env, &attestation_id).len()
+    }
+
+    pub fn get_version(env: Env) -> Result<String, Error> {
+        Storage::get_version(&env).ok_or(Error::NotInitialized)
     }
 
     pub fn get_contract_metadata(env: Env) -> Result<ContractMetadata, Error> {

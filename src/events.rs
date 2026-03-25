@@ -149,4 +149,17 @@ impl Events {
             (proposal_id.clone(), attestation_id.clone()),
         );
     }
+
+    /// Emitted when a registered issuer endorses an existing attestation.
+    pub fn attestation_endorsed(
+        env: &Env,
+        attestation_id: &String,
+        endorser: &Address,
+        timestamp: u64,
+    ) {
+        env.events().publish(
+            (symbol_short!("endorsed"), endorser.clone()),
+            (attestation_id.clone(), timestamp),
+        );
+    }
 }

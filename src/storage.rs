@@ -27,7 +27,7 @@
 //!   used for pagination via `list_claim_types`.
 //! - `FeeConfig` — global attestation fee settings.
 
-use crate::types::{Attestation, ClaimTypeInfo, Error, FeeConfig, IssuerMetadata, MultiSigProposal, TtlConfig};
+use crate::types::{Attestation, ClaimTypeInfo, Endorsement, Error, FeeConfig, IssuerMetadata, MultiSigProposal, TtlConfig};
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 /// Keys used to address data in contract storage.
@@ -59,6 +59,8 @@ pub enum StorageKey {
     ClaimTypeList,
     /// A multi-sig attestation proposal keyed by its ID.
     MultiSigProposal(String),
+    /// Ordered list of endorsements for an attestation, keyed by attestation ID.
+    Endorsements(String),
 }
 
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -320,5 +322,24 @@ impl Storage {
         env.storage()
             .persistent()
             .has(&StorageKey::MultiSigProposal(id.clone()))
+    }
+
+    /// Return the ordered list of endorsements for `attestation_id`, or an empty
+    /// [`Vec`] if none exist.
+    pub fn get_endorsements(env: &Env, attestation_id: &String) -> Vec<Endorsement> {
+        env.storage()
+            .persistent()
+            .get(&StorageKey::Endorsements(attestation_id.clone()))
+            .unwrap_or(Vec::new(env))
+    }
+
+    /// Append `endorsement` to the endorsement list for its attestation and refresh TTL.
+    pub fn add_endorsement(env: &Env, endorsement: &Endorsement) {
+        let key = StorageKey::Endorsements(endorsement.attestation_id.clone());
+        let ttl = get_ttl_lifetime(env);
+        let mut endorsements = Self::get_endorsements(env, &endorsement.attestation_id);
+        endorsements.push_back(endorsement.clone());
+        env.storage().persistent().set(&key, &endorsements);
+        env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 }
