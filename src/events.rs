@@ -55,10 +55,10 @@ impl Events {
         );
     }
 
-    pub fn attestation_revoked(env: &Env, attestation_id: &String, issuer: &Address) {
+    pub fn attestation_revoked(env: &Env, attestation_id: &String, issuer: &Address, reason: &Option<String>) {
         env.events().publish(
             (symbol_short!("revoked"), issuer.clone()),
-            attestation_id.clone(),
+            (attestation_id.clone(), reason.clone()),
         );
     }
 

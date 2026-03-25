@@ -27,6 +27,15 @@ fn validate_metadata(metadata: &Option<String>) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_reason(reason: &Option<String>) -> Result<(), Error> {
+    if let Some(r) = reason {
+        if r.len() > 128 {
+            return Err(Error::ReasonTooLong);
+        }
+    }
+    Ok(())
+}
+
 fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), Error> {
     if let Some(t) = tags {
         if t.len() > 5 {
@@ -249,6 +258,7 @@ impl TrustLinkContract {
             source_chain: None,
             source_tx: None,
             tags,
+            revocation_reason: None,
         };
 
         store_attestation(&env, &attestation);
@@ -292,6 +302,7 @@ impl TrustLinkContract {
             source_chain: None,
             source_tx: None,
             tags: None,
+            revocation_reason: None,
         };
 
         store_attestation(&env, &attestation);
@@ -340,6 +351,7 @@ impl TrustLinkContract {
             source_chain: Some(source_chain),
             source_tx: Some(source_tx),
             tags: None,
+            revocation_reason: None,
         };
 
         store_attestation(&env, &attestation);
@@ -384,6 +396,7 @@ impl TrustLinkContract {
                 source_chain: None,
                 source_tx: None,
                 tags: None,
+                revocation_reason: None,
             };
 
             store_attestation(&env, &attestation);
@@ -398,8 +411,10 @@ impl TrustLinkContract {
         env: Env,
         issuer: Address,
         attestation_id: String,
+        reason: Option<String>,
     ) -> Result<(), Error> {
         issuer.require_auth();
+        validate_reason(&reason)?;
         let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
 
         if attestation.issuer != issuer {
@@ -411,8 +426,9 @@ impl TrustLinkContract {
         }
 
         attestation.revoked = true;
+        attestation.revocation_reason = reason.clone();
         Storage::set_attestation(&env, &attestation);
-        Events::attestation_revoked(&env, &attestation_id, &issuer);
+        Events::attestation_revoked(&env, &attestation_id, &issuer, &reason);
         Ok(())
     }
 
@@ -420,9 +436,11 @@ impl TrustLinkContract {
         env: Env,
         issuer: Address,
         attestation_ids: Vec<String>,
+        reason: Option<String>,
     ) -> Result<u32, Error> {
         issuer.require_auth();
         Validation::require_issuer(&env, &issuer)?;
+        validate_reason(&reason)?;
 
         let mut count = 0;
         for attestation_id in attestation_ids.iter() {
@@ -437,8 +455,9 @@ impl TrustLinkContract {
             }
 
             attestation.revoked = true;
+            attestation.revocation_reason = reason.clone();
             Storage::set_attestation(&env, &attestation);
-            Events::attestation_revoked(&env, &attestation_id, &issuer);
+            Events::attestation_revoked(&env, &attestation_id, &issuer, &reason);
             count += 1;
         }
 
@@ -906,6 +925,7 @@ impl TrustLinkContract {
                 source_chain: None,
                 source_tx: None,
                 tags: None,
+                revocation_reason: None,
             };
 
             store_attestation(&env, &attestation);

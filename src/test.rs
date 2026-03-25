@@ -306,7 +306,7 @@ fn test_has_valid_claim_and_revocation() {
     let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
     assert!(client.has_valid_claim(&subject, &claim_type));
 
-    client.revoke_attestation(&issuer, &id);
+    client.revoke_attestation(&issuer, &id, &None);
     assert!(!client.has_valid_claim(&subject, &claim_type));
     assert!(client.get_attestation(&id).revoked);
 }
@@ -977,4 +977,76 @@ fn test_multisig_unregistered_proposer_rejected() {
     let result =
         client.try_propose_attestation(&unregistered, &subject, &claim_type, &required, &2);
     assert_eq!(result, Err(Ok(types::Error::Unauthorized)));
+}
+
+#[test]
+fn test_revoke_with_reason_stores_reason() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let reason = String::from_str(&env, "Document expired");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    client.revoke_attestation(&issuer, &id, &Some(reason.clone()));
+
+    let attestation = client.get_attestation(&id);
+    assert!(attestation.revoked);
+    assert_eq!(attestation.revocation_reason, Some(reason));
+}
+
+#[test]
+fn test_revoke_without_reason_stores_none() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    client.revoke_attestation(&issuer, &id, &None);
+
+    let attestation = client.get_attestation(&id);
+    assert!(attestation.revoked);
+    assert_eq!(attestation.revocation_reason, None);
+}
+
+#[test]
+fn test_revoke_reason_too_long_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+
+    // 129 'a' characters — one over the limit
+    let long_reason = String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let result = client.try_revoke_attestation(&issuer, &id, &Some(long_reason));
+    assert_eq!(result, Err(Ok(types::Error::ReasonTooLong)));
+}
+
+#[test]
+fn test_revoke_reason_exactly_128_chars_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+
+    // Exactly 128 'a' characters
+    let exact_reason = String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    client.revoke_attestation(&issuer, &id, &Some(exact_reason.clone()));
+
+    let attestation = client.get_attestation(&id);
+    assert!(attestation.revoked);
+    assert_eq!(attestation.revocation_reason, Some(exact_reason));
 }
