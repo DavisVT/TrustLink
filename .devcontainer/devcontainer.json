@@ -1,4 +1,6 @@
-ainers/rust:1-bullseye",
+{
+  "name": "TrustLink — Rust + Soroban",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bullseye",
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "remoteEnv": {
     "SOROBAN_NETWORK": "testnet"
