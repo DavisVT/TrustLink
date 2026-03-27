@@ -41,4 +41,6 @@ pub enum Error {
     AlreadyEndorsed = 23,
     /// The contract is paused; write operations are temporarily disabled.
     ContractPaused = 24,
+    /// The claim type exceeds 64 characters or contains invalid characters (only alphanumeric and underscores allowed).
+    InvalidClaimType = 25,
 }

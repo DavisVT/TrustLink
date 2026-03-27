@@ -371,6 +371,7 @@ impl TrustLinkContract {
         issuer.require_auth();
         Validation::require_not_paused(&env)?;
         Validation::require_issuer(&env, &issuer)?;
+        Validation::validate_claim_type(&claim_type)?;
         validate_metadata(&metadata)?;
         validate_tags(&tags)?;
         validate_native_expiration(&env, expiration)?;

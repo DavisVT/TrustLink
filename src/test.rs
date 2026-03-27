@@ -1729,3 +1729,95 @@ fn test_multi_issuer_one_expired_one_valid_returns_true() {
     // issuer1's attestation is expired but issuer2's is still valid
     assert!(client.has_valid_claim(&subject, &claim));
 }
+
+// ── claim_type validation tests ──────────────────────────────────────────────
+
+#[test]
+fn test_valid_claim_type_kyc_passed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    assert!(!id.is_empty());
+}
+
+#[test]
+fn test_valid_claim_type_accredited_investor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "ACCREDITED_INVESTOR");
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    assert!(!id.is_empty());
+}
+
+#[test]
+fn test_valid_claim_type_exactly_64_chars() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    // 64 alphanumeric characters — exactly at the limit
+    let claim_type = String::from_str(&env, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    assert!(!id.is_empty());
+}
+
+#[test]
+#[should_panic]
+fn test_claim_type_too_long_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    // 65 characters — one over the limit
+    let claim_type = String::from_str(&env, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_type_with_space_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC PASSED");
+    client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_type_with_hyphen_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC-PASSED");
+    client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_type_with_dot_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "kyc.passed");
+    client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_type_with_special_chars_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC@PASSED!");
+    client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+}
