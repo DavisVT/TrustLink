@@ -41,4 +41,6 @@ pub enum Error {
     AlreadyEndorsed = 23,
     /// The contract is paused; write operations are temporarily disabled.
     ContractPaused = 24,
+    /// Subject is not on the issuer's whitelist and the issuer has whitelist mode enabled.
+    SubjectNotWhitelisted = 25,
 }
