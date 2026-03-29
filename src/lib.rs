@@ -16,7 +16,7 @@ use soroban_sdk::{contract, contractimpl, token::TokenClient, Address, Env, Stri
 use crate::events::Events;
 use crate::storage::Storage;
 use crate::types::{
-    Attestation, AttestationRequest, AttestationStatus, AuditAction, AuditEntry, ClaimTypeInfo,
+    AdminCouncil, Attestation, AttestationRequest, AttestationStatus, AuditAction, AuditEntry, ClaimTypeInfo,
     ContractConfig, ContractMetadata, Endorsement, Error, FeeConfig, GlobalStats, HealthStatus,
     IssuerMetadata, IssuerStats, IssuerTier, MultiSigProposal, RequestStatus, TtlConfig,
     ATTESTATION_REQUEST_TTL_SECS, MULTISIG_PROPOSAL_TTL_SECS,
@@ -268,7 +268,9 @@ impl TrustLinkContract {
         if Storage::has_admin(&env) {
             return Err(Error::AlreadyInitialized);
         }
-        Storage::set_admin(&env, &admin);
+        let mut council: AdminCouncil = Vec::new(&env);
+        council.push_back(admin.clone());
+        Storage::set_admin_council(&env, &council);
         Storage::set_version(&env, &String::from_str(&env, "1.0.0"));
         Storage::set_fee_config(&env, &default_fee_config(&admin));
 
@@ -283,6 +285,7 @@ impl TrustLinkContract {
         Ok(())
     }
 
+    /// Legacy transfer_admin - now use add_admin then remove_admin.
     pub fn transfer_admin(
         env: Env,
         current_admin: Address,
@@ -290,8 +293,47 @@ impl TrustLinkContract {
     ) -> Result<(), Error> {
         current_admin.require_auth();
         Validation::require_admin(&env, &current_admin)?;
-        Storage::set_admin(&env, &new_admin);
+        Storage::add_admin(&env, &new_admin);
+        Storage::remove_admin(&env, &current_admin);
         Events::admin_transferred(&env, &current_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Add new admin to council (any existing admin).
+    pub fn add_admin(
+        env: Env,
+        existing_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), Error> {
+        existing_admin.require_auth();
+        Validation::require_admin(&env, &existing_admin)?;
+        if Storage::is_admin(&env, &new_admin) {
+            return Ok(()); // idempotent
+        }
+        Storage::add_admin(&env, &new_admin);
+        let ts = env.ledger().timestamp();
+        Events::admin_added(&env, &existing_admin, &new_admin, ts);
+        Ok(())
+    }
+
+    /// Remove admin from council (any existing admin, cannot remove last).
+    pub fn remove_admin(
+        env: Env,
+        existing_admin: Address,
+        admin_to_remove: Address,
+    ) -> Result<(), Error> {
+        existing_admin.require_auth();
+        Validation::require_admin(&env, &existing_admin)?;
+        let council = Storage::get_admin_council(&env)?;
+        if council.len() <= 1 {
+            return Err(Error::LastAdminCannotBeRemoved);
+        }
+        if !Storage::is_admin(&env, &admin_to_remove) {
+            return Ok(()); // idempotent
+        }
+        Storage::remove_admin(&env, &admin_to_remove);
+        let ts = env.ledger().timestamp();
+        Events::admin_removed(&env, &existing_admin, &admin_to_remove, ts);
         Ok(())
     }
 

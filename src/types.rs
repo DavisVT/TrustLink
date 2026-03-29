@@ -218,6 +218,23 @@ pub struct StorageLimits {
     pub max_attestations_per_subject: u32,
 }
 
+/// Delegation from an issuer to a sub-issuer for specific claim types.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Delegation {
+    /// Issuer delegating authority.
+    pub delegator: Address,
+    /// Sub-issuer receiving delegation.
+    pub delegate: Address,
+    /// Specific claim type this delegation covers.
+    pub claim_type: String,
+    /// Optional expiration timestamp for this delegation.
+    pub expiration: Option<u64>,
+}
+
+#[contracttype]
+pub type AdminCouncil = Vec<Address>;
+
 impl Attestation {
     /// Hashes an arbitrary byte payload and returns a 32-character lowercase hex string.
     ///

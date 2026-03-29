@@ -1,6 +1,6 @@
 use soroban_sdk::{symbol_short, Address, Env, String};
 
-use crate::types::{Attestation, IssuerTier};
+use crate::types::{Attestation, IssuerTier, Address};
 
 pub struct Events;
 
@@ -173,6 +173,22 @@ impl Events {
         );
     }
 
+    /// Emitted when an admin adds a new admin to the council.
+    pub fn admin_added(env: &Env, by_admin: &Address, new_admin: &Address, timestamp: u64) {
+        env.events().publish(
+            (symbol_short!("adm_add"), by_admin.clone()),
+            (new_admin.clone(), timestamp),
+        );
+    }
+
+    /// Emitted when an admin removes an admin from the council.
+    pub fn admin_removed(env: &Env, by_admin: &Address, removed_admin: &Address, timestamp: u64) {
+        env.events().publish(
+            (symbol_short!("adm_rem"), by_admin.clone()),
+            (removed_admin.clone(), timestamp),
+        );
+    }
+
     /// Emitted when a multi-sig proposal reaches threshold and the attestation is activated.
     pub fn multisig_activated(env: &Env, proposal_id: &String, attestation_id: &String) {
         env.events().publish(
@@ -270,6 +286,33 @@ impl Events {
         env.events().publish(
             (symbol_short!("req_no"), issuer.clone()),
             (request_id.clone(), reason.clone()),
+        );
+    }
+
+    /// Emitted when issuer creates delegation to sub-issuer for claim_type.
+    pub fn delegation_created(
+        env: &Env,
+        delegator: &Address,
+        delegate: &Address,
+        claim_type: &String,
+        expiration: Option<u64>,
+    ) {
+        env.events().publish(
+            (symbol_short!("del_created"), delegator.clone()),
+            (delegate.clone(), claim_type.clone(), expiration),
+        );
+    }
+
+    /// Emitted when issuer revokes delegation.
+    pub fn delegation_revoked(
+        env: &Env,
+        delegator: &Address,
+        delegate: &Address,
+        claim_type: &String,
+    ) {
+        env.events().publish(
+            (symbol_short!("del_revoked"), delegator.clone()),
+            (delegate.clone(), claim_type.clone()),
         );
     }
 }

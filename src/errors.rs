@@ -43,4 +43,12 @@ pub enum Error {
     ContractPaused = 24,
     /// Subject is not on the issuer's whitelist and the issuer has whitelist mode enabled.
     SubjectNotWhitelisted = 25,
+    /// No delegation found for the caller acting on behalf of this issuer and claim type.
+    DelegationNotFound = 26,
+    /// Delegation for this claim type has expired.
+    DelegationExpired = 27,
+    /// Cannot delegate attestation authority to self.
+    CannotDelegateToSelf = 28,
+    /// Cannot remove the last remaining admin from council
+    LastAdminCannotBeRemoved = 29,
 }
