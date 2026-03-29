@@ -22,14 +22,13 @@ use soroban_sdk::{Address, Env, String};
 pub struct Validation;
 
 impl Validation {
-    /// Assert that `caller` is the registered administrator.
+    /// Assert that `caller` is in the admin council.
     ///
     /// # Errors
-    /// - [`Error::NotInitialized`] — contract has not been initialized.
-    /// - [`Error::Unauthorized`] — `caller` does not match the stored admin.
+    /// - [`Error::NotInitialized`] — council not initialized.
+    /// - [`Error::Unauthorized`] — `caller` not in council.
     pub fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
-        let admin = Storage::get_admin(env)?;
-        if caller != &admin {
+        if !Storage::is_admin(env, caller) {
             return Err(Error::Unauthorized);
         }
         Ok(())

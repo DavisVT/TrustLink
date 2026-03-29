@@ -49,4 +49,6 @@ pub enum Error {
     DelegationExpired = 27,
     /// Cannot delegate attestation authority to self.
     CannotDelegateToSelf = 28,
+    /// Cannot remove the last remaining admin from council
+    LastAdminCannotBeRemoved = 29,
 }

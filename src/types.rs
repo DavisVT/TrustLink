@@ -232,6 +232,9 @@ pub struct Delegation {
     pub expiration: Option<u64>,
 }
 
+#[contracttype]
+pub type AdminCouncil = Vec<Address>;
+
 impl Attestation {
     /// Hashes an arbitrary byte payload and returns a 32-character lowercase hex string.
     ///

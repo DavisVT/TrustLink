@@ -1,6 +1,6 @@
 use soroban_sdk::{symbol_short, Address, Env, String};
 
-use crate::types::{Attestation, IssuerTier};
+use crate::types::{Attestation, IssuerTier, Address};
 
 pub struct Events;
 
@@ -170,6 +170,22 @@ impl Events {
         env.events().publish(
             (symbol_short!("adm_xfer"),),
             (old_admin.clone(), new_admin.clone()),
+        );
+    }
+
+    /// Emitted when an admin adds a new admin to the council.
+    pub fn admin_added(env: &Env, by_admin: &Address, new_admin: &Address, timestamp: u64) {
+        env.events().publish(
+            (symbol_short!("adm_add"), by_admin.clone()),
+            (new_admin.clone(), timestamp),
+        );
+    }
+
+    /// Emitted when an admin removes an admin from the council.
+    pub fn admin_removed(env: &Env, by_admin: &Address, removed_admin: &Address, timestamp: u64) {
+        env.events().publish(
+            (symbol_short!("adm_rem"), by_admin.clone()),
+            (removed_admin.clone(), timestamp),
         );
     }
 

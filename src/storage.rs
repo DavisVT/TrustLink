@@ -29,7 +29,7 @@
 //! - `GlobalStats` — running counters for total attestations, revocations, and issuers.
 
 use crate::types::{
-    Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Endorsement, Error, ExpirationHook,
+    AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Endorsement, Error, ExpirationHook,
     FeeConfig, GlobalStats, IssuerMetadata, IssuerStats, IssuerTier, MultiSigProposal, TtlConfig, Delegation,
 };
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
@@ -38,8 +38,10 @@ use crate::types::{Attestation, ClaimTypeInfo, Error, IssuerMetadata, StorageLim
 /// Keys used to address data in contract storage.
 #[contracttype]
 pub enum StorageKey {
-    /// The contract administrator address.
+    /// The contract administrator address (legacy - now using AdminCouncil).
     Admin,
+    /// List of admin addresses (multi-admin council).
+    AdminCouncil,
     /// Semver version string set at initialization.
     Version,
     /// Global attestation fee settings.
@@ -115,16 +117,84 @@ fn get_ttl_lifetime(env: &Env) -> u32 {
 pub struct Storage;
 
 impl Storage {
-    /// Return `true` if the admin key exists in instance storage.
+    /// Return `true` if admin council is initialized (has >=1 admins).
     pub fn has_admin(env: &Env) -> bool {
-        env.storage().instance().has(&StorageKey::Admin)
+        if let Ok(council) = Self::get_admin_council(env) {
+            !council.is_empty()
+        } else {
+            false
+        }
     }
 
-    /// Persist `admin` in instance storage and refresh the instance TTL.
+    /// Legacy: Persist single `admin` (deprecated, use AdminCouncil).
     pub fn set_admin(env: &Env, admin: &Address) {
         let ttl = get_ttl_lifetime(env);
-        env.storage().instance().set(&StorageKey::Admin, admin);
+        let mut council = Vec::new(env);
+        council.push_back(admin.clone());
+        Self::set_admin_council(env, &council);
+    }
+
+    /// Retrieve the admin council (Vec<Address>).
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if council key absent.
+    pub fn get_admin_council(env: &Env) -> Result<AdminCouncil, Error> {
+        env.storage()
+            .instance()
+            .get(&amp;StorageKey::AdminCouncil)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Persist the admin council and refresh TTL.
+    pub fn set_admin_council(env: &amp;Env, council: &amp;AdminCouncil) {
+        let ttl = get_ttl_lifetime(env);
+        env.storage().instance().set(&amp;StorageKey::AdminCouncil, council);
         env.storage().instance().extend_ttl(ttl, ttl);
+    }
+
+    /// Return true if `address` is an admin in the council.
+    pub fn is_admin(env: &amp;Env, address: &amp;Address) -> bool {
+        if let Ok(council) = Self::get_admin_council(env) {
+            for admin in council.iter() {
+                if admin == address {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Add `admin` to council if not already present.
+    pub fn add_admin(env: &amp;Env, admin: &amp;Address) {
+        let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
+        let mut found = false;
+        for a in council.iter() {
+            if a == admin {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            council.push_back(admin.clone());
+            Self::set_admin_council(env, &amp;council);
+        }
+    }
+
+    /// Remove `admin` from council if present.
+    pub fn remove_admin(env: &amp;Env, admin: &amp;Address) {
+        let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
+        let mut new_council = Vec::new(env);
+        let mut found = false;
+        for a in council.iter() {
+            if a != admin {
+                new_council.push_back(a.clone());
+            } else {
+                found = true;
+            }
+        }
+        if found {
+            Self::set_admin_council(env, &amp;new_council);
+        }
     }
 
     /// Persist `version` in instance storage alongside the admin.
@@ -167,15 +237,14 @@ impl Storage {
         env.storage().instance().get(&StorageKey::TtlConfig)
     }
 
-    /// Retrieve the admin address.
+    /// Retrieve the primary admin address (council[0]).
     ///
+    /// Backward compatible with single-admin. Returns Error if council empty.
     /// # Errors
-    /// - [`Error::NotInitialized`] — admin key is absent.
+    /// - [`Error::NotInitialized`] — council empty.
     pub fn get_admin(env: &Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(Error::NotInitialized)
+        let council = Self::get_admin_council(env)?;
+        council.first().cloned().ok_or(Error::NotInitialized)
     }
 
     /// Return `true` if `address` is in the issuer registry.
