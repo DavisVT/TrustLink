@@ -218,6 +218,15 @@ pub struct StorageLimits {
     pub max_attestations_per_subject: u32,
 }
 
+impl Default for StorageLimits {
+    fn default() -> Self {
+        Self {
+            max_attestations_per_issuer: 10_000,
+            max_attestations_per_subject: 100,
+        }
+    }
+}
+
 /// Delegation from an issuer to a sub-issuer for specific claim types.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
