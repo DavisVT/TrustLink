@@ -18,15 +18,6 @@ use crate::types::{
 };
 use crate::validation::Validation;
 
-fn validate_metadata(metadata: &Option<String>) -> Result<(), Error> {
-    if let Some(value) = metadata {
-        if value.len() > 256 {
-            return Err(Error::MetadataTooLong);
-        }
-    }
-    Ok(())
-}
-
 fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), Error> {
     if let Some(t) = tags {
         if t.len() > 5 {
@@ -220,7 +211,7 @@ impl TrustLinkContract {
     ) -> Result<String, Error> {
         issuer.require_auth();
         Validation::require_issuer(&env, &issuer)?;
-        validate_metadata(&metadata)?;
+        Validation::validate_metadata(&env, &metadata)?;
         validate_tags(&tags)?;
         validate_native_expiration(&env, expiration)?;
 

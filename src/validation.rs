@@ -16,7 +16,7 @@
 
 use crate::storage::Storage;
 use crate::types::Error;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, String};
 
 /// Authorization checks used by contract entry points.
 pub struct Validation;
@@ -53,6 +53,19 @@ impl Validation {
     pub fn require_bridge(env: &Env, caller: &Address) -> Result<(), Error> {
         if !Storage::is_bridge(env, caller) {
             return Err(Error::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Validate that `metadata`, if present, does not exceed 256 characters.
+    ///
+    /// # Errors
+    /// - [`Error::MetadataTooLong`] — metadata string exceeds 256 chars.
+    pub fn validate_metadata(_env: &Env, metadata: &Option<String>) -> Result<(), Error> {
+        if let Some(value) = metadata {
+            if value.len() > 256 {
+                return Err(Error::MetadataTooLong);
+            }
         }
         Ok(())
     }
