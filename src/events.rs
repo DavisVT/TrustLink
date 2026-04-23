@@ -149,4 +149,16 @@ impl Events {
             (proposal_id.clone(), attestation_id.clone()),
         );
     }
+
+    /// Emitted when the contract is paused by an admin.
+    pub fn contract_paused(env: &Env, admin: &Address) {
+        env.events()
+            .publish((symbol_short!("paused"), admin.clone()), ());
+    }
+
+    /// Emitted when the contract is unpaused by an admin.
+    pub fn contract_unpaused(env: &Env, admin: &Address) {
+        env.events()
+            .publish((symbol_short!("unpaused"), admin.clone()), ());
+    }
 }

@@ -59,6 +59,8 @@ pub enum StorageKey {
     ClaimTypeList,
     /// A multi-sig attestation proposal keyed by its ID.
     MultiSigProposal(String),
+    /// Whether the contract is currently paused.
+    Paused,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -320,5 +322,20 @@ impl Storage {
         env.storage()
             .persistent()
             .has(&StorageKey::MultiSigProposal(id.clone()))
+    }
+
+    /// Return `true` if the contract is currently paused.
+    pub fn is_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<StorageKey, bool>(&StorageKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Set the paused state of the contract.
+    pub fn set_paused(env: &Env, paused: bool) {
+        let ttl = get_ttl_lifetime(env);
+        env.storage().instance().set(&StorageKey::Paused, &paused);
+        env.storage().instance().extend_ttl(ttl, ttl);
     }
 }

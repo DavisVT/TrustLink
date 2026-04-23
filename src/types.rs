@@ -124,6 +124,8 @@ pub enum Error {
     ProposalFinalized = 19,
     /// The proposal has expired without reaching threshold.
     ProposalExpired = 20,
+    /// The contract is paused and cannot accept state-changing operations.
+    ContractPaused = 21,
 }
 
 impl Attestation {
