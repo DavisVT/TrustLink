@@ -225,10 +225,13 @@ fn store_attestation(env: &Env, attestation: &Attestation) {
     Storage::add_subject_attestation(env, &attestation.subject, &attestation.id);
     Storage::add_issuer_attestation(env, &attestation.issuer, &attestation.id);
 
-    // Increment total_issued counter atomically with the attestation write.
+    // Increment total_issued counter for this issuer.
     let mut stats = Storage::get_issuer_stats(env, &attestation.issuer);
     stats.total_issued += 1;
     Storage::set_issuer_stats(env, &attestation.issuer, &stats);
+
+    // Increment global total_attestations counter.
+    Storage::increment_total_attestations(env, 1);
 }
 
 /// Fire the expiration hook for `subject` if one is registered and the
@@ -612,7 +615,6 @@ impl TrustLinkContract {
         };
 
         store_attestation(env, &attestation);
-        Storage::increment_total_attestations(env, 1);
         Events::attestation_created(env, &attestation);
         Storage::append_audit_entry(
             env,
@@ -712,7 +714,6 @@ impl TrustLinkContract {
         };
 
         store_attestation(&env, &attestation);
-        Storage::increment_total_attestations(&env, 1);
         Events::attestation_imported(&env, &attestation);
         Storage::append_audit_entry(
             &env,
@@ -774,7 +775,6 @@ impl TrustLinkContract {
         };
 
         store_attestation(&env, &attestation);
-        Storage::increment_total_attestations(&env, 1);
         Events::attestation_bridged(&env, &attestation);
         Storage::append_audit_entry(
             &env,
@@ -862,7 +862,6 @@ impl TrustLinkContract {
             ids.push_back(attestation_id);
         }
 
-        Storage::increment_total_attestations(&env, ids.len() as u64);
         Storage::set_last_issuance_time(&env, &issuer, timestamp);
         Ok(ids)
     }
@@ -875,6 +874,7 @@ impl TrustLinkContract {
     ) -> Result<(), Error> {
         issuer.require_auth();
         Validation::require_not_paused(&env)?;
+        Validation::require_issuer(&env, &issuer)?;
         validate_reason(&reason)?;
         let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
 
@@ -918,6 +918,7 @@ impl TrustLinkContract {
         reason: Option<String>,
     ) -> Result<u32, Error> {
         issuer.require_auth();
+        Validation::require_issuer(&env, &issuer)?;
         validate_reason(&reason)?;
 
         let mut count = 0;
@@ -1570,7 +1571,6 @@ impl TrustLinkContract {
             };
 
             store_attestation(&env, &attestation);
-            Storage::increment_total_attestations(&env, 1);
             Events::attestation_created(&env, &attestation);
             Events::multisig_activated(&env, &proposal_id, &attestation_id);
         } else {
