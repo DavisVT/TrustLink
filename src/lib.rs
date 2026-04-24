@@ -11,262 +11,17 @@ mod validation;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token::TokenClient, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
+use types::{AdminCouncil, Attestation, AttestationStatus, ClaimTypeInfo, ContractMetadata, CouncilOperation, CouncilProposal, Error, IssuerMetadata};
+use storage::Storage;
+use validation::Validation;
+use events::Events;
 
-use crate::events::Events;
-use crate::storage::Storage;
-use crate::types::{
-    AdminCouncil, Attestation, AttestationRequest, AttestationStatus, AuditAction, AuditEntry, ClaimTypeInfo,
-    ContractConfig, ContractMetadata, Endorsement, Error, FeeConfig, GlobalStats, HealthStatus,
-    IssuerMetadata, IssuerStats, IssuerTier, MultiSigProposal, RequestStatus, TtlConfig,
-    ATTESTATION_REQUEST_TTL_SECS, MULTISIG_PROPOSAL_TTL_SECS,
-};
-use crate::validation::Validation;
-
-// Seconds in one day.
-const SECS_PER_DAY: u64 = 86_400;
-
-/// Minimal interface expected on a registered callback contract.
-/// The callback receives the subject, attestation ID, and expiration timestamp.
-mod callback {
-    use soroban_sdk::{contractclient, Address, Env, String};
-
-    #[contractclient(name = "ExpirationCallbackClient")]
-    #[allow(dead_code)]
-    pub trait ExpirationCallback {
-        fn notify_expiring(env: Env, subject: Address, attestation_id: String, expiration: u64);
-    }
-}
-
-use callback::ExpirationCallbackClient;
-
-fn validate_metadata(metadata: &Option<String>) -> Result<(), Error> {
-    if let Some(value) = metadata {
-        if value.len() > 256 {
-            return Err(Error::MetadataTooLong);
-        }
-    }
-    Ok(())
-}
-
-/// Claim type must be non-empty and at most 64 characters.
-/// Only alphanumeric characters, underscores, and hyphens are allowed.
-fn validate_claim_type(claim_type: &String) -> Result<(), Error> {
-    let len = claim_type.len();
-    if len == 0 || len > 64 {
-        return Err(Error::InvalidClaimType);
-    }
-    // Copy into a fixed-size stack buffer and validate each byte.
-    let mut buf = [0u8; 64];
-    claim_type.copy_into_slice(&mut buf[..len as usize]);
-    for &byte in &buf[..len as usize] {
-        if !matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-') {
-            return Err(Error::InvalidClaimType);
-        }
-    }
-    Ok(())
-}
-
-fn validate_reason(reason: &Option<String>) -> Result<(), Error> {
-    if let Some(r) = reason {
-        if r.len() > 128 {
-            return Err(Error::ReasonTooLong);
-        }
-    }
-    Ok(())
-}
-
-fn validate_tags(tags: &Option<Vec<String>>) -> Result<(), Error> {
-    if let Some(t) = tags {
-        if t.len() > 5 {
-            return Err(Error::TooManyTags);
-        }
-        for tag in t.iter() {
-            if tag.len() > 32 {
-                return Err(Error::TagTooLong);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_jurisdiction(env: &Env, jurisdiction: &Option<String>) -> Result<(), Error> {
-    if let Some(code) = jurisdiction {
-        if code.len() != 2 {
-            return Err(Error::InvalidJurisdiction);
-        }
-
-        let valid_codes = [
-            "AF", "AX", "AL", "DZ", "AS", "AD", "AO", "AI", "AQ", "AG", "AR", "AM", "AW", "AU", "AT", "AZ",
-            "BS", "BH", "BD", "BB", "BY", "BE", "BZ", "BJ", "BM", "BT", "BO", "BQ", "BA", "BW", "BV", "BR",
-            "IO", "BN", "BG", "BF", "BI", "CV", "KH", "CM", "CA", "KY", "CF", "TD", "CL", "CN", "CX", "CC",
-            "CO", "KM", "CG", "CD", "CK", "CR", "CI", "HR", "CU", "CW", "CY", "CZ", "DK", "DJ", "DM", "DO",
-            "EC", "EG", "SV", "GQ", "ER", "EE", "SZ", "ET", "FK", "FO", "FJ", "FI", "FR", "GF", "PF", "TF",
-            "GA", "GM", "GE", "DE", "GH", "GI", "GR", "GL", "GD", "GP", "GU", "GT", "GG", "GN", "GW", "GY",
-            "HT", "HM", "VA", "HN", "HK", "HU", "IS", "IN", "ID", "IR", "IQ", "IE", "IM", "IL", "IT", "JM",
-            "JP", "JE", "JO", "KZ", "KE", "KI", "KP", "KR", "KW", "KG", "LA", "LV", "LB", "LS", "LR", "LY",
-            "LI", "LT", "LU", "MO", "MK", "MG", "MW", "MY", "MV", "ML", "MT", "MH", "MQ", "MR", "MU", "YT",
-            "MX", "FM", "MD", "MC", "MN", "ME", "MS", "MA", "MZ", "MM", "NA", "NR", "NP", "NL", "NC", "NZ",
-            "NI", "NE", "NG", "NU", "NF", "MP", "NO", "OM", "PK", "PW", "PS", "PA", "PG", "PY", "PE", "PH",
-            "PN", "PL", "PT", "PR", "QA", "RE", "RO", "RU", "RW", "BL", "SH", "KN", "LC", "MF", "PM", "VC",
-            "WS", "SM", "ST", "SA", "SN", "RS", "SC", "SL", "SG", "SX", "SK", "SI", "SB", "SO", "ZA", "GS",
-            "SS", "ES", "LK", "SD", "SR", "SJ", "SE", "CH", "SY", "TW", "TJ", "TZ", "TH", "TL", "TG", "TK",
-            "TO", "TT", "TN", "TR", "TM", "TC", "TV", "UG", "UA", "AE", "GB", "US", "UM", "UY", "UZ", "VU",
-            "VE", "VN", "VG", "VI", "WF", "EH", "YE", "ZM", "ZW",
-        ];
-
-        let mut valid = false;
-        for iso in valid_codes.iter() {
-            if code == &String::from_str(env, iso) {
-                valid = true;
-                break;
-            }
-        }
-
-        if !valid {
-            return Err(Error::InvalidJurisdiction);
-        }
-    }
-    Ok(())
-}
-
-fn validate_native_expiration(env: &Env, expiration: Option<u64>) -> Result<(), Error> {
-    if let Some(value) = expiration {
-        if value <= env.ledger().timestamp() {
-            return Err(Error::InvalidExpiration);
-        }
-    }
-    Ok(())
-}
-
-fn validate_import_timestamps(
-    env: &Env,
-    timestamp: u64,
-    expiration: Option<u64>,
-) -> Result<(), Error> {
-    if timestamp > env.ledger().timestamp() {
-        return Err(Error::InvalidTimestamp);
-    }
-
-    if let Some(value) = expiration {
-        if value <= timestamp {
-            return Err(Error::InvalidExpiration);
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_fee_config(env: &Env, fee: i128, fee_token: &Option<Address>) -> Result<(), Error> {
-    if fee < 0 {
-        return Err(Error::InvalidFee);
-    }
-
-    if fee > 0 && fee_token.is_none() {
-        return Err(Error::FeeTokenRequired);
-    }
-
-    // Validate that fee_token is a real token contract by attempting a balance call
-    if let Some(token_addr) = fee_token {
-        let token = TokenClient::new(&env, token_addr);
-        // Dry-run balance call to verify it's a token contract
-        let _ = token.balance(&env.current_contract_address());
-    }
-
-    Ok(())
-}
-
-fn check_rate_limit(env: &Env, issuer: &Address) -> Result<(), Error> {
-    if let Some(config) = Storage::get_rate_limit_config(env) {
-        if config.min_issuance_interval == 0 {
-            return Ok(());
-        }
-
-        let current_time = env.ledger().timestamp();
-        if let Some(last_issuance) = Storage::get_last_issuance_time(env, issuer) {
-            let elapsed = current_time.saturating_sub(last_issuance);
-            if elapsed < config.min_issuance_interval {
-                return Err(Error::RateLimited);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn default_fee_config(admin: &Address) -> FeeConfig {
-    FeeConfig {
-        attestation_fee: 0,
-        fee_collector: admin.clone(),
-        fee_token: None,
-    }
-}
-
-fn load_fee_config(env: &Env) -> Result<FeeConfig, Error> {
-    Storage::get_fee_config(env).ok_or(Error::NotInitialized)
-}
-
-fn charge_attestation_fee(env: &Env, issuer: &Address) -> Result<(), Error> {
-    let fee_config = load_fee_config(env)?;
-
-    if fee_config.attestation_fee < 0 {
-        return Err(Error::InvalidFee);
-    }
-
-    if fee_config.attestation_fee == 0 {
-        return Ok(());
-    }
-
-    let fee_token = fee_config.fee_token.ok_or(Error::FeeTokenRequired)?;
-    TokenClient::new(env, &fee_token).transfer(
-        issuer,
-        &fee_config.fee_collector,
-        &fee_config.attestation_fee,
-    );
-
-    Ok(())
-}
-
-fn store_attestation(env: &Env, attestation: &Attestation) {
-    Storage::set_attestation(env, attestation);
-    Storage::add_subject_attestation(env, &attestation.subject, &attestation.id);
-    Storage::add_issuer_attestation(env, &attestation.issuer, &attestation.id);
-
-    // Increment total_issued counter for this issuer.
-    let mut stats = Storage::get_issuer_stats(env, &attestation.issuer);
-    stats.total_issued += 1;
-    Storage::set_issuer_stats(env, &attestation.issuer, &stats);
-
-    // Increment global total_attestations counter.
-    Storage::increment_total_attestations(env, 1);
-}
-
-/// Fire the expiration hook for `subject` if one is registered and the
-/// attestation is inside the notification window. Failures are silently
-/// swallowed so the main flow is never interrupted.
-fn maybe_trigger_expiration_hook(
-    env: &Env,
-    subject: &Address,
-    attestation_id: &String,
-    expiration: u64,
-    current_time: u64,
-) {
-    let hook = match Storage::get_expiration_hook(env, subject) {
-        Some(h) => h,
-        None => return,
-    };
-
-    let notify_window = (hook.notify_days_before as u64) * SECS_PER_DAY;
-    let notify_from = expiration.saturating_sub(notify_window);
-
-    if current_time >= notify_from && current_time < expiration {
-        Events::expiration_hook_triggered(env, subject, attestation_id, expiration);
-        // Best-effort cross-contract call — ignore any panic/error.
-        let client = ExpirationCallbackClient::new(env, &hook.callback_contract);
-        let _ = client.try_notify_expiring(subject, attestation_id, &expiration);
-    }
-}
-
+/// The TrustLink smart contract.
+///
+/// Provides a shared attestation infrastructure: admins manage a registry of
+/// trusted issuers, issuers create and revoke attestations, and any caller can
+/// verify claims against the registry.
 #[contract]
 pub struct TrustLinkContract;
 
@@ -504,10 +259,54 @@ impl TrustLinkContract {
         Ok(())
     }
 
-    /// Configure the minimum issuance interval (rate limit) for attestation creation.
+    /// Enable whitelist mode for the calling issuer.
     ///
-    /// When `min_issuance_interval` is 0 (default), rate limiting is disabled.
-    /// When > 0, issuers must wait at least that many seconds between attestation creations.
+    /// When enabled, `create_attestation` will reject subjects not on the
+    /// issuer's whitelist with [`Error::SubjectNotWhitelisted`].
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not a registered issuer.
+    pub fn enable_whitelist_mode(env: Env, issuer: Address) -> Result<(), Error> {
+        issuer.require_auth();
+        Validation::require_issuer(&env, &issuer)?;
+        Storage::set_whitelist_mode(&env, &issuer, true);
+        Events::whitelist_mode_enabled(&env, &issuer);
+        Ok(())
+    }
+
+    /// Add a subject to the calling issuer's whitelist.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not a registered issuer.
+    pub fn add_to_whitelist(env: Env, issuer: Address, subject: Address) -> Result<(), Error> {
+        issuer.require_auth();
+        Validation::require_issuer(&env, &issuer)?;
+        Storage::add_to_whitelist(&env, &issuer, &subject);
+        Events::whitelist_updated(&env, &issuer, &subject, true);
+        Ok(())
+    }
+
+    /// Remove a subject from the calling issuer's whitelist.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not a registered issuer.
+    pub fn remove_from_whitelist(env: Env, issuer: Address, subject: Address) -> Result<(), Error> {
+        issuer.require_auth();
+        Validation::require_issuer(&env, &issuer)?;
+        Storage::remove_from_whitelist(&env, &issuer, &subject);
+        Events::whitelist_updated(&env, &issuer, &subject, false);
+        Ok(())
+    }
+
+    /// Return `true` if `subject` is on `issuer`'s whitelist.
+    pub fn is_whitelisted(env: Env, issuer: Address, subject: Address) -> bool {
+        Storage::is_whitelisted(&env, &issuer, &subject)
+    }
+
+    /// Create a new attestation about a subject address.    ///
+    /// The attestation ID is derived deterministically from `(issuer, subject,
+    /// claim_type, timestamp)`, so the same combination at the same ledger
+    /// timestamp will always produce the same ID.
     ///
     /// # Errors
     /// - [`Error::Unauthorized`] — caller is not the admin.
@@ -606,6 +405,15 @@ impl TrustLinkContract {
         if Storage::has_attestation(env, &attestation_id) {
             return Err(Error::DuplicateAttestation);
         }
+        
+        // Reject subject if issuer has whitelist mode enabled and subject is not listed
+        if Storage::is_whitelist_mode(&env, &issuer)
+            && !Storage::is_whitelisted(&env, &issuer, &subject)
+        {
+            return Err(Error::SubjectNotWhitelisted);
+        }
+
+        // Generate deterministic ID from attestation data
 
         // Validate claim_type length (enforce max 64 characters)
         let claim_type_len = claim_type.len();
@@ -1018,75 +826,63 @@ impl TrustLinkContract {
         Ok(())
     }
 
-    pub fn update_expiration(
+    /// Revoke multiple attestations in a single atomic call (issuer only).
+    ///
+    /// Authorization is checked once for the issuer. If any attestation does
+    /// not belong to the caller or is already revoked the entire batch is
+    /// rolled back — no partial writes occur.
+    ///
+    /// Max batch size is 50. Passing more IDs returns [`Error::BatchTooLarge`].
+    ///
+    /// Emits one `revoked` event per attestation.
+    ///
+    /// # Parameters
+    /// - `issuer` — authorized issuer (must authorize).
+    /// - `attestation_ids` — list of IDs to revoke (max 50).
+    /// - `reason` — optional human-readable reason stored in the event data.
+    ///
+    /// # Returns
+    /// Count of revoked attestations.
+    ///
+    /// # Errors
+    /// - [`Error::BatchTooLarge`] — more than 50 IDs supplied.
+    /// - [`Error::Unauthorized`] — issuer is not registered or does not own an attestation.
+    /// - [`Error::NotFound`] — an ID does not exist.
+    /// - [`Error::AlreadyRevoked`] — an attestation is already revoked.
+    pub fn revoke_attestations_batch(
         env: Env,
         issuer: Address,
-        attestation_id: String,
-        new_expiration: Option<u64>,
-    ) -> Result<(), Error> {
+        attestation_ids: Vec<String>,
+        reason: Option<String>,
+    ) -> Result<u32, Error> {
+        const MAX_BATCH: u32 = 50;
+
         issuer.require_auth();
         Validation::require_issuer(&env, &issuer)?;
 
-        if let Some(value) = new_expiration {
-            if value <= env.ledger().timestamp() {
-                return Err(Error::InvalidExpiration);
+        if attestation_ids.len() > MAX_BATCH {
+            return Err(Error::BatchTooLarge);
+        }
+
+        // Validate all attestations first (atomic — no partial writes)
+        for id in attestation_ids.iter() {
+            let attestation = Storage::get_attestation(&env, &id)?;
+            if attestation.issuer != issuer {
+                return Err(Error::Unauthorized);
+            }
+            if attestation.revoked {
+                return Err(Error::AlreadyRevoked);
             }
         }
 
-        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
-        if attestation.issuer != issuer {
-            return Err(Error::Unauthorized);
-        }
-        if attestation.revoked {
-            return Err(Error::AlreadyRevoked);
-        }
-
-        attestation.expiration = new_expiration;
-        Storage::set_attestation(&env, &attestation);
-        Events::attestation_updated(&env, &attestation_id, &issuer, new_expiration);
-        Storage::append_audit_entry(
-            &env,
-            &attestation_id,
-            &AuditEntry {
-                action: AuditAction::Updated,
-                actor: issuer.clone(),
-                timestamp: env.ledger().timestamp(),
-                details: None,
-            },
-        );
-        Ok(())
-    }
-
-    pub fn has_valid_claim(env: Env, subject: Address, claim_type: String) -> bool {
-        let attestation_ids = Storage::get_subject_attestations(&env, &subject);
-        let current_time = env.ledger().timestamp();
-
-        for attestation_id in attestation_ids.iter() {
-            if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
-                if attestation.deleted || attestation.claim_type != claim_type {
-                    continue;
-                }
-                match attestation.get_status(current_time) {
-                    AttestationStatus::Valid => {
-                        // Fire expiration hook if the attestation has an
-                        // expiration and is inside the notification window.
-                        if let Some(exp) = attestation.expiration {
-                            maybe_trigger_expiration_hook(
-                                &env,
-                                &subject,
-                                &attestation_id,
-                                exp,
-                                current_time,
-                            );
-                        }
-                        return true;
-                    }
-                    AttestationStatus::Expired => {
-                        Events::attestation_expired(&env, &attestation_id, &subject);
-                    }
-                    AttestationStatus::Revoked | AttestationStatus::Pending => {}
-                }
-            }
+        // All checks passed — apply writes
+        let mut count: u32 = 0;
+        for id in attestation_ids.iter() {
+            let mut attestation = Storage::get_attestation(&env, &id)?;
+            attestation.revoked = true;
+            Storage::set_attestation(&env, &attestation);
+            Events::attestation_revoked_with_reason(&env, &id, &issuer, &reason);
+            count += 1;
         }
 
         false
@@ -1372,7 +1168,7 @@ impl TrustLinkContract {
         env: Env,
         subject: Address,
         claim_type: String,
-    ) -> Result<Attestation, Error> {
+    ) -> Option<Attestation> {
         let attestation_ids = Storage::get_subject_attestations(&env, &subject);
         let current_time = env.ledger().timestamp();
         let mut index = attestation_ids.len();
@@ -1380,17 +1176,18 @@ impl TrustLinkContract {
         while index > 0 {
             index -= 1;
             if let Some(attestation_id) = attestation_ids.get(index) {
-                let attestation = Storage::get_attestation(&env, &attestation_id)?;
-                if !attestation.deleted
-                    && attestation.claim_type == claim_type
-                    && attestation.get_status(current_time) == AttestationStatus::Valid
-                {
-                    return Ok(attestation);
+                if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
+                    if !attestation.deleted
+                        && attestation.claim_type == claim_type
+                        && attestation.get_status(current_time) == AttestationStatus::Valid
+                    {
+                        return Some(attestation);
+                    }
                 }
             }
         }
 
-        Err(Error::NotFound)
+        None
     }
 
     pub fn is_issuer(env: Env, address: Address) -> bool {
@@ -1757,87 +1554,219 @@ impl TrustLinkContract {
         })
     }
 
-    pub fn get_config(env: Env) -> ContractConfig {
-        let ttl_config = Storage::get_ttl_config(&env).unwrap_or(TtlConfig { ttl_days: 30 });
+    // ── Admin Council (M-of-N quorum for sensitive operations) ──────────────
 
-        let fee_config = Storage::get_fee_config(&env).unwrap_or_else(|| FeeConfig {
-            attestation_fee: 0,
-            fee_collector: env.current_contract_address(),
-            fee_token: None,
-        });
-
-        let version = Storage::get_version(&env).unwrap_or_else(|| String::from_str(&env, ""));
-
-        ContractConfig {
-            ttl_config,
-            fee_config,
-            contract_name: String::from_str(&env, "TrustLink"),
-            contract_version: version,
-            contract_description: String::from_str(
-                &env,
-                "On-chain attestation and verification system for the Stellar blockchain.",
-            ),
-        }
-    }
-
-    /// Transfer ownership of an attestation to a new issuer (admin only).
+    /// Initialize the admin council with a list of members and a quorum threshold.
     ///
-    /// Used when an issuer is removed/deactivated, allowing admin to re-assign orphaned
-    /// attestations to a new issuer. Updates issuer field, indexes, stats, emits event.
+    /// Only the contract admin may call this. Can be called once; re-calling
+    /// updates the council configuration.
+    ///
+    /// # Parameters
+    /// - `admin` — current administrator (must authorize).
+    /// - `members` — addresses eligible to vote on proposals.
+    /// - `quorum` — minimum approvals required to execute a proposal.
     ///
     /// # Errors
-    /// [`Error::Unauthorized`] if caller is not admin or new_issuer not registered.
-    /// [`Error::NotFound`] if attestation_id does not exist.
-    pub fn transfer_attestation(
+    /// - [`Error::Unauthorized`] / [`Error::NotInitialized`] — admin check fails.
+    /// - [`Error::InvalidQuorum`] — quorum is 0 or exceeds member count.
+    pub fn init_council(
         env: Env,
         admin: Address,
-        attestation_id: String,
-        new_issuer: Address,
+        members: Vec<Address>,
+        quorum: u32,
     ) -> Result<(), Error> {
         admin.require_auth();
         Validation::require_admin(&env, &admin)?;
 
-        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
-        let old_issuer = attestation.issuer.clone();
-
-        Validation::require_issuer(&env, &new_issuer)?;
-
-        if old_issuer == new_issuer {
-            return Ok(());
+        if quorum == 0 || quorum > members.len() {
+            return Err(Error::InvalidQuorum);
         }
 
-        // Update indexes
-        Storage::remove_issuer_attestation(&env, &old_issuer, &attestation_id);
-        let mut old_stats = Storage::get_issuer_stats(&env, &old_issuer);
-        old_stats.total_issued = old_stats.total_issued.saturating_sub(1);
-        Storage::set_issuer_stats(&env, &old_issuer, &old_stats);
-
-        attestation.issuer = new_issuer.clone();
-        Storage::set_attestation(&env, &attestation);
-
-        Storage::add_issuer_attestation(&env, &new_issuer, &attestation_id);
-        let mut new_stats = Storage::get_issuer_stats(&env, &new_issuer);
-        new_stats.total_issued += 1;
-        Storage::set_issuer_stats(&env, &new_issuer, &new_stats);
-
-        // Event and audit
-        Events::attestation_transferred(&env, &attestation_id, &old_issuer, &new_issuer);
-        let timestamp = env.ledger().timestamp();
-        Storage::append_audit_entry(
-            &env,
-            &attestation_id,
-            &AuditEntry {
-                action: AuditAction::Transferred,
-                actor: admin.clone(),
-                timestamp,
-                details: Some(format!(
-                    "{}",
-                    new_issuer.to_string()
-                )),
-            },
-        );
-
+        let member_count = members.len();
+        let council = AdminCouncil { members, quorum };
+        Storage::set_council(&env, &council);
+        Events::council_initialized(&env, quorum, member_count);
         Ok(())
+    }
+
+    /// Create a new council proposal for a sensitive operation.
+    ///
+    /// The caller must be a council member. The proposal starts with the
+    /// proposer's approval already counted.
+    ///
+    /// # Parameters
+    /// - `proposer` — council member creating the proposal (must authorize).
+    /// - `operation` — the [`CouncilOperation`] to execute upon quorum.
+    ///
+    /// # Returns
+    /// The new proposal ID.
+    ///
+    /// # Errors
+    /// - [`Error::CouncilNotInitialized`] — council has not been set up.
+    /// - [`Error::Unauthorized`] — caller is not a council member.
+    pub fn propose_council_action(
+        env: Env,
+        proposer: Address,
+        operation: CouncilOperation,
+    ) -> Result<u32, Error> {
+        proposer.require_auth();
+
+        let council = Storage::get_council(&env).ok_or(Error::CouncilNotInitialized)?;
+
+        // Verify proposer is a council member
+        let mut is_member = false;
+        for m in council.members.iter() {
+            if m == proposer {
+                is_member = true;
+                break;
+            }
+        }
+        if !is_member {
+            return Err(Error::Unauthorized);
+        }
+
+        let id = Storage::next_proposal_id(&env);
+        let mut approvals: Vec<Address> = Vec::new(&env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = CouncilProposal {
+            id,
+            operation,
+            proposer: proposer.clone(),
+            approvals,
+            executed: false,
+        };
+
+        Storage::set_proposal(&env, &proposal);
+        Events::proposal_created(&env, id, &proposer);
+        Ok(id)
+    }
+
+    /// Approve an existing council proposal.
+    ///
+    /// The caller must be a council member and must not have already approved.
+    ///
+    /// # Parameters
+    /// - `approver` — council member approving (must authorize).
+    /// - `proposal_id` — ID of the proposal to approve.
+    ///
+    /// # Errors
+    /// - [`Error::CouncilNotInitialized`] — council has not been set up.
+    /// - [`Error::NotFound`] — proposal does not exist.
+    /// - [`Error::AlreadyExecuted`] — proposal already executed.
+    /// - [`Error::Unauthorized`] — caller is not a council member.
+    /// - [`Error::AlreadyApproved`] — caller already approved this proposal.
+    pub fn approve_council_action(
+        env: Env,
+        approver: Address,
+        proposal_id: u32,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+
+        let council = Storage::get_council(&env).ok_or(Error::CouncilNotInitialized)?;
+        let mut proposal = Storage::get_proposal(&env, proposal_id).ok_or(Error::NotFound)?;
+
+        if proposal.executed {
+            return Err(Error::AlreadyExecuted);
+        }
+
+        // Verify approver is a council member
+        let mut is_member = false;
+        for m in council.members.iter() {
+            if m == approver {
+                is_member = true;
+                break;
+            }
+        }
+        if !is_member {
+            return Err(Error::Unauthorized);
+        }
+
+        // Check not already approved
+        for a in proposal.approvals.iter() {
+            if a == approver {
+                return Err(Error::AlreadyApproved);
+            }
+        }
+
+        proposal.approvals.push_back(approver.clone());
+        Storage::set_proposal(&env, &proposal);
+        Events::proposal_approved(&env, proposal_id, &approver);
+        Ok(())
+    }
+
+    /// Execute a council proposal once quorum is reached.
+    ///
+    /// Any council member may trigger execution once enough approvals exist.
+    ///
+    /// # Parameters
+    /// - `executor` — council member triggering execution (must authorize).
+    /// - `proposal_id` — ID of the proposal to execute.
+    ///
+    /// # Errors
+    /// - [`Error::CouncilNotInitialized`] — council has not been set up.
+    /// - [`Error::NotFound`] — proposal does not exist.
+    /// - [`Error::AlreadyExecuted`] — proposal already executed.
+    /// - [`Error::Unauthorized`] — caller is not a council member.
+    /// - [`Error::QuorumNotReached`] — not enough approvals yet.
+    pub fn execute_council_action(
+        env: Env,
+        executor: Address,
+        proposal_id: u32,
+    ) -> Result<(), Error> {
+        executor.require_auth();
+
+        let council = Storage::get_council(&env).ok_or(Error::CouncilNotInitialized)?;
+        let mut proposal = Storage::get_proposal(&env, proposal_id).ok_or(Error::NotFound)?;
+
+        if proposal.executed {
+            return Err(Error::AlreadyExecuted);
+        }
+
+        // Verify executor is a council member
+        let mut is_member = false;
+        for m in council.members.iter() {
+            if m == executor {
+                is_member = true;
+                break;
+            }
+        }
+        if !is_member {
+            return Err(Error::Unauthorized);
+        }
+
+        if proposal.approvals.len() < council.quorum {
+            return Err(Error::QuorumNotReached);
+        }
+
+        // Execute the operation
+        match proposal.operation.clone() {
+            CouncilOperation::RemoveIssuer(issuer) => {
+                Storage::remove_issuer(&env, &issuer);
+                // Emit issuer_removed using the first council member as "admin" proxy
+                if let Some(first) = council.members.get(0) {
+                    Events::issuer_removed(&env, &issuer, &first);
+                }
+            }
+            CouncilOperation::PauseContract => {
+                Storage::set_paused(&env, true);
+            }
+        }
+
+        proposal.executed = true;
+        Storage::set_proposal(&env, &proposal);
+        Events::proposal_executed(&env, proposal_id);
+        Ok(())
+    }
+
+    /// Return the current council configuration, or `None` if not initialized.
+    pub fn get_council(env: Env) -> Option<AdminCouncil> {
+        Storage::get_council(&env)
+    }
+
+    /// Return a council proposal by ID, or `None` if not found.
+    pub fn get_council_proposal(env: Env, proposal_id: u32) -> Option<CouncilProposal> {
+        Storage::get_proposal(&env, proposal_id)
     }
 }
 
