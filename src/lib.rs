@@ -1022,75 +1022,63 @@ impl TrustLinkContract {
         Ok(())
     }
 
-    pub fn update_expiration(
+    /// Revoke multiple attestations in a single atomic call (issuer only).
+    ///
+    /// Authorization is checked once for the issuer. If any attestation does
+    /// not belong to the caller or is already revoked the entire batch is
+    /// rolled back — no partial writes occur.
+    ///
+    /// Max batch size is 50. Passing more IDs returns [`Error::BatchTooLarge`].
+    ///
+    /// Emits one `revoked` event per attestation.
+    ///
+    /// # Parameters
+    /// - `issuer` — authorized issuer (must authorize).
+    /// - `attestation_ids` — list of IDs to revoke (max 50).
+    /// - `reason` — optional human-readable reason stored in the event data.
+    ///
+    /// # Returns
+    /// Count of revoked attestations.
+    ///
+    /// # Errors
+    /// - [`Error::BatchTooLarge`] — more than 50 IDs supplied.
+    /// - [`Error::Unauthorized`] — issuer is not registered or does not own an attestation.
+    /// - [`Error::NotFound`] — an ID does not exist.
+    /// - [`Error::AlreadyRevoked`] — an attestation is already revoked.
+    pub fn revoke_attestations_batch(
         env: Env,
         issuer: Address,
-        attestation_id: String,
-        new_expiration: Option<u64>,
-    ) -> Result<(), Error> {
+        attestation_ids: Vec<String>,
+        reason: Option<String>,
+    ) -> Result<u32, Error> {
+        const MAX_BATCH: u32 = 50;
+
         issuer.require_auth();
         Validation::require_issuer(&env, &issuer)?;
 
-        if let Some(value) = new_expiration {
-            if value <= env.ledger().timestamp() {
-                return Err(Error::InvalidExpiration);
+        if attestation_ids.len() > MAX_BATCH {
+            return Err(Error::BatchTooLarge);
+        }
+
+        // Validate all attestations first (atomic — no partial writes)
+        for id in attestation_ids.iter() {
+            let attestation = Storage::get_attestation(&env, &id)?;
+            if attestation.issuer != issuer {
+                return Err(Error::Unauthorized);
+            }
+            if attestation.revoked {
+                return Err(Error::AlreadyRevoked);
             }
         }
 
-        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
-        if attestation.issuer != issuer {
-            return Err(Error::Unauthorized);
-        }
-        if attestation.revoked {
-            return Err(Error::AlreadyRevoked);
-        }
-
-        attestation.expiration = new_expiration;
-        Storage::set_attestation(&env, &attestation);
-        Events::attestation_updated(&env, &attestation_id, &issuer, new_expiration);
-        Storage::append_audit_entry(
-            &env,
-            &attestation_id,
-            &AuditEntry {
-                action: AuditAction::Updated,
-                actor: issuer.clone(),
-                timestamp: env.ledger().timestamp(),
-                details: None,
-            },
-        );
-        Ok(())
-    }
-
-    pub fn has_valid_claim(env: Env, subject: Address, claim_type: String) -> bool {
-        let attestation_ids = Storage::get_subject_attestations(&env, &subject);
-        let current_time = env.ledger().timestamp();
-
-        for attestation_id in attestation_ids.iter() {
-            if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
-                if attestation.deleted || attestation.claim_type != claim_type {
-                    continue;
-                }
-                match attestation.get_status(current_time) {
-                    AttestationStatus::Valid => {
-                        // Fire expiration hook if the attestation has an
-                        // expiration and is inside the notification window.
-                        if let Some(exp) = attestation.expiration {
-                            maybe_trigger_expiration_hook(
-                                &env,
-                                &subject,
-                                &attestation_id,
-                                exp,
-                                current_time,
-                            );
-                        }
-                        return true;
-                    }
-                    AttestationStatus::Expired => {
-                        Events::attestation_expired(&env, &attestation_id, &subject);
-                    }
-                    AttestationStatus::Revoked | AttestationStatus::Pending => {}
-                }
-            }
+        // All checks passed — apply writes
+        let mut count: u32 = 0;
+        for id in attestation_ids.iter() {
+            let mut attestation = Storage::get_attestation(&env, &id)?;
+            attestation.revoked = true;
+            Storage::set_attestation(&env, &attestation);
+            Events::attestation_revoked_with_reason(&env, &id, &issuer, &reason);
+            count += 1;
         }
 
         false
