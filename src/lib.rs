@@ -1507,7 +1507,22 @@ impl TrustLinkContract {
         result
     }
 
-    #[must_use]
+    /// Returns the count of non-revoked, non-expired, non-deleted attestations for `subject`.
+    pub fn get_valid_claim_count(env: Env, subject: Address) -> u32 {
+        let current_time = env.ledger().timestamp();
+        let mut count: u32 = 0;
+        for attestation_id in Storage::get_subject_attestations(&env, &subject).iter() {
+            if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
+                if !attestation.deleted
+                    && attestation.get_status(current_time) == AttestationStatus::Valid
+                {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     pub fn get_attestation_by_type(
         env: Env,
         subject: Address,
