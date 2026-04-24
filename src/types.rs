@@ -55,31 +55,7 @@ impl IssuerTier {
     }
 }
 
-/// Per-issuer statistics.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IssuerStats {
-    pub total_issued: u64,
-}
-
-/// A registered expiration notification hook for a subject.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExpirationHook {
-    pub callback_contract: Address,
-    pub notify_days_before: u32,
-}
-
-/// Full contract configuration snapshot returned by `get_config`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractConfig {
-    pub ttl_config: TtlConfig,
-    pub fee_config: FeeConfig,
-    pub contract_name: String,
-    pub contract_version: String,
-    pub contract_description: String,
-}
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -96,55 +72,36 @@ pub struct ClaimTypeInfo {
     pub description: String,
 }
 
+/// The admin council configuration: member list and quorum threshold.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IssuerMetadata {
-    pub name: String,
-    pub url: String,
-    pub description: String,
+pub struct AdminCouncil {
+    /// Addresses eligible to vote on council proposals.
+    pub members: Vec<Address>,
+    /// Minimum approvals required to execute a proposal.
+    pub quorum: u32,
 }
 
+/// Operations that require council quorum approval.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeeConfig {
-    pub attestation_fee: i128,
-    pub fee_collector: Address,
-    pub fee_token: Option<Address>,
+pub enum CouncilOperation {
+    RemoveIssuer(Address),
+    PauseContract,
 }
 
+/// A pending council proposal awaiting quorum.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TtlConfig {
-    pub ttl_days: u32,
+pub struct CouncilProposal {
+    pub id: u32,
+    pub operation: CouncilOperation,
+    pub proposer: Address,
+    pub approvals: Vec<Address>,
+    pub executed: bool,
 }
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RateLimitConfig {
-    pub min_issuance_interval: u64,
-}
-
-/// Global contract statistics for dashboards and analytics.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GlobalStats {
-    pub total_attestations: u64,
-    pub total_revocations: u64,
-    pub total_issuers: u64,
-}
-
-/// Lightweight health status returned by `health_check`.
-///
-/// No authentication required — designed for monitoring dashboards and uptime probes.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HealthStatus {
-    pub initialized: bool,
-    pub admin_set: bool,
-    pub issuer_count: u64,
-    pub total_attestations: u64,
-}
-
+/// A single attestation record stored on-chain.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Attestation {
@@ -251,7 +208,16 @@ pub enum Error {
     Expired = 7,
     InvalidValidFrom = 8,
     InvalidExpiration = 9,
-    SubjectNotWhitelisted = 25,
+    /// Council quorum not yet reached for this proposal.
+    QuorumNotReached = 11,
+    /// Proposal has already been executed.
+    AlreadyExecuted = 12,
+    /// Caller already approved this proposal.
+    AlreadyApproved = 13,
+    /// Council has not been initialized.
+    CouncilNotInitialized = 14,
+    /// Quorum threshold exceeds member count or is zero.
+    InvalidQuorum = 15,
 }
 
 #[contracttype]
