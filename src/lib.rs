@@ -40,13 +40,8 @@ mod callback {
 
 use callback::ExpirationCallbackClient;
 
-fn validate_metadata(metadata: &Option<String>) -> Result<(), Error> {
-    if let Some(value) = metadata {
-        if value.len() > 256 {
-            return Err(Error::MetadataTooLong);
-        }
-    }
-    Ok(())
+fn validate_metadata(env: &Env, metadata: &Option<String>) -> Result<(), Error> {
+    Validation::validate_metadata(env, metadata)
 }
 
 /// Claim type must be non-empty and at most 64 characters.
@@ -626,7 +621,7 @@ impl TrustLinkContract {
         Validation::require_not_paused(&env)?;
         Validation::require_issuer(&env, &issuer)?;
         Validation::validate_claim_type(&claim_type)?;
-        validate_metadata(&metadata)?;
+        validate_metadata(&env, &metadata)?;
         validate_jurisdiction(env, &jurisdiction)?;
         validate_tags(&tags)?;
         validate_native_expiration(env, expiration)?;
