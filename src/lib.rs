@@ -203,7 +203,10 @@ impl TrustLinkContract {
 
         for attestation_id in attestation_ids.iter() {
             if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
-                if attestation.deleted || attestation.claim_type != claim_type {
+                if attestation.deleted {
+                    continue;
+                }
+                if attestation.claim_type != claim_type {
                     continue;
                 }
                 if attestation.get_status(current_time) != AttestationStatus::Valid {
@@ -429,6 +432,7 @@ impl TrustLinkContract {
             timestamp,
             expiration,
             revoked: false,
+            deleted: false,
             metadata,
             jurisdiction,
             valid_from: None,
@@ -536,6 +540,7 @@ impl TrustLinkContract {
             timestamp,
             expiration,
             revoked: false,
+            deleted: false,
             metadata: None,
             jurisdiction: None,
             valid_from: None,
@@ -596,6 +601,7 @@ impl TrustLinkContract {
             timestamp,
             expiration: None,
             revoked: false,
+            deleted: false,
             metadata: None,
             jurisdiction: None,
             valid_from: None,
@@ -668,6 +674,7 @@ impl TrustLinkContract {
                 timestamp,
                 expiration,
                 revoked: false,
+                deleted: false,
                 metadata: None,
                 jurisdiction: None,
                 valid_from: None,
@@ -792,6 +799,25 @@ impl TrustLinkContract {
         Ok(count)
     }
 
+    /// GDPR right-to-erasure soft delete. Only the subject of the attestation
+    /// may call this. Sets `deleted = true` and emits a `deletion_requested` event.
+    /// Deleted attestations are excluded from all query results.
+    pub fn request_deletion(
+        env: Env,
+        subject: Address,
+        attestation_id: String,
+    ) -> Result<(), Error> {
+        subject.require_auth();
+        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
+        if attestation.subject != subject {
+            return Err(Error::Unauthorized);
+        }
+        attestation.deleted = true;
+        Storage::set_attestation(&env, &attestation);
+        Events::deletion_requested(&env, &attestation_id, &subject);
+        Ok(())
+    }
+
     pub fn renew_attestation(
         env: Env,
         issuer: Address,
@@ -875,14 +901,44 @@ impl TrustLinkContract {
             }
         }
 
-        // All checks passed — apply writes
-        let mut count: u32 = 0;
-        for id in attestation_ids.iter() {
-            let mut attestation = Storage::get_attestation(&env, &id)?;
-            attestation.revoked = true;
-            Storage::set_attestation(&env, &attestation);
-            Events::attestation_revoked_with_reason(&env, &id, &issuer, &reason);
-            count += 1;
+        attestation.expiration = new_expiration;
+        Storage::set_attestation(&env, &attestation);
+        Events::attestation_updated(&env, &attestation_id, &issuer, new_expiration);
+        Ok(())
+    }
+
+    pub fn has_valid_claim(env: Env, subject: Address, claim_type: String) -> bool {
+        let attestation_ids = Storage::get_subject_attestations(&env, &subject);
+        let current_time = env.ledger().timestamp();
+
+        for attestation_id in attestation_ids.iter() {
+            if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
+                if attestation.deleted {
+                    continue;
+                }
+                if attestation.claim_type == claim_type {
+                    match attestation.get_status(current_time) {
+                        AttestationStatus::Valid => {
+                            // Fire expiration hook if the attestation has an
+                            // expiration and is inside the notification window.
+                            if let Some(exp) = attestation.expiration {
+                                maybe_trigger_expiration_hook(
+                                    &env,
+                                    &subject,
+                                    &attestation_id,
+                                    exp,
+                                    current_time,
+                                );
+                            }
+                            return true;
+                        }
+                        AttestationStatus::Expired => {
+                            Events::attestation_expired(&env, &attestation_id, &subject);
+                        }
+                        AttestationStatus::Revoked | AttestationStatus::Pending => {}
+                    }
+                }
+            }
         }
 
         false
@@ -968,7 +1024,11 @@ impl TrustLinkContract {
     }
 
     pub fn get_attestation(env: Env, attestation_id: String) -> Result<Attestation, Error> {
-        Storage::get_attestation(&env, &attestation_id)
+        let attestation = Storage::get_attestation(&env, &attestation_id)?;
+        if attestation.deleted {
+            return Err(Error::NotFound);
+        }
+        Ok(attestation)
     }
 
     /// Request GDPR deletion of an attestation.
@@ -1019,6 +1079,9 @@ impl TrustLinkContract {
         attestation_id: String,
     ) -> Result<AttestationStatus, Error> {
         let attestation = Storage::get_attestation(&env, &attestation_id)?;
+        if attestation.deleted {
+            return Err(Error::NotFound);
+        }
         let status = attestation.get_status(env.ledger().timestamp());
 
         if status == AttestationStatus::Expired {
@@ -1034,12 +1097,16 @@ impl TrustLinkContract {
         start: u32,
         limit: u32,
     ) -> Vec<String> {
-        crate::storage::paginate(
-            &env,
-            &Storage::get_subject_attestations(&env, &subject),
-            start,
-            limit,
-        )
+        let ids = Storage::get_subject_attestations(&env, &subject);
+        let mut filtered = Vec::new(&env);
+        for id in ids.iter() {
+            if let Ok(a) = Storage::get_attestation(&env, &id) {
+                if !a.deleted {
+                    filtered.push_back(id);
+                }
+            }
+        }
+        paginate_strings(&env, filtered, start, limit)
     }
 
     pub fn get_attestations_in_range(
@@ -1129,12 +1196,16 @@ impl TrustLinkContract {
         start: u32,
         limit: u32,
     ) -> Vec<String> {
-        crate::storage::paginate(
-            &env,
-            &Storage::get_issuer_attestations(&env, &issuer),
-            start,
-            limit,
-        )
+        let ids = Storage::get_issuer_attestations(&env, &issuer);
+        let mut filtered = Vec::new(&env);
+        for id in ids.iter() {
+            if let Ok(a) = Storage::get_attestation(&env, &id) {
+                if !a.deleted {
+                    filtered.push_back(id);
+                }
+            }
+        }
+        paginate_strings(&env, filtered, start, limit)
     }
 
     pub fn get_valid_claims(env: Env, subject: Address) -> Vec<String> {
@@ -1143,9 +1214,7 @@ impl TrustLinkContract {
 
         for attestation_id in Storage::get_subject_attestations(&env, &subject).iter() {
             if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
-                if !attestation.deleted
-                    && attestation.get_status(current_time) == AttestationStatus::Valid
-                {
+                if !attestation.deleted && attestation.get_status(current_time) == AttestationStatus::Valid {
                     let mut already_present = false;
                     for existing in result.iter() {
                         if existing == attestation.claim_type {
@@ -1176,13 +1245,12 @@ impl TrustLinkContract {
         while index > 0 {
             index -= 1;
             if let Some(attestation_id) = attestation_ids.get(index) {
-                if let Ok(attestation) = Storage::get_attestation(&env, &attestation_id) {
-                    if !attestation.deleted
-                        && attestation.claim_type == claim_type
-                        && attestation.get_status(current_time) == AttestationStatus::Valid
-                    {
-                        return Some(attestation);
-                    }
+                let attestation = Storage::get_attestation(&env, &attestation_id)?;
+                if !attestation.deleted
+                    && attestation.claim_type == claim_type
+                    && attestation.get_status(current_time) == AttestationStatus::Valid
+                {
+                    return Ok(attestation);
                 }
             }
         }
@@ -1379,6 +1447,7 @@ impl TrustLinkContract {
                 timestamp: proposal.created_at,
                 expiration: None,
                 revoked: false,
+                deleted: false,
                 metadata: None,
                 jurisdiction: None,
                 valid_from: None,
