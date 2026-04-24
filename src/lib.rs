@@ -677,7 +677,6 @@ impl TrustLinkContract {
         // Record last issuance time for rate limiting
         Storage::set_last_issuance_time(env, &issuer, timestamp);
 
-        Events::attestation_created(env, &attestation);
         Ok(attestation_id)
     }
 
