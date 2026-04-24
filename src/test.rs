@@ -1786,6 +1786,8 @@ fn test_error_already_revoked() {
 
     let result = client.try_revoke_attestation(&issuer, &id, &None);
     assert_eq!(result, Err(Ok(Error::AlreadyRevoked)));
+}
+
 // ---------------------------------------------------------------------------
 // Issuer removal – attestation persistence
 // ---------------------------------------------------------------------------
