@@ -28,14 +28,20 @@
 //! - `FeeConfig` — global attestation fee settings.
 //! - `GlobalStats` — running counters for total attestations, revocations, and issuers.
 
-use crate::types::{Attestation, ClaimTypeInfo, Endorsement, Error, FeeConfig, GlobalStats, IssuerMetadata, MultiSigProposal, TtlConfig};
+use crate::types::{
+    AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Endorsement, Error, ExpirationHook,
+    FeeConfig, GlobalStats, IssuerMetadata, IssuerStats, IssuerTier, MultiSigProposal, TtlConfig, Delegation, RateLimitConfig,
+};
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
+use crate::types::{AdminCouncil, Attestation, ClaimTypeInfo, CouncilProposal, Error, IssuerMetadata};
 
 /// Keys used to address data in contract storage.
 #[contracttype]
 pub enum StorageKey {
-    /// The contract administrator address.
+    /// The contract administrator address (legacy - now using AdminCouncil).
     Admin,
+    /// List of admin addresses (multi-admin council).
+    AdminCouncil,
     /// Semver version string set at initialization.
     Version,
     /// Global attestation fee settings.
@@ -58,17 +64,22 @@ pub enum StorageKey {
     ClaimType(String),
     /// Ordered list of registered claim type identifiers.
     ClaimTypeList,
-    /// A multi-sig attestation proposal keyed by its ID.
-    MultiSigProposal(String),
-    /// Ordered list of endorsements for an attestation, keyed by attestation ID.
-    Endorsements(String),
-    /// Global contract statistics (total attestations, revocations, issuers).
-    GlobalStats,
+    /// Admin council configuration (members + quorum).
+    AdminCouncil,
+    /// A council proposal keyed by its numeric ID.
+    CouncilProposal(u32),
+    /// Auto-incrementing proposal counter.
+    ProposalCounter,
+    /// Contract paused flag.
+    Paused,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280;
 const DEFAULT_TTL_DAYS: u32 = 30;
 const DEFAULT_INSTANCE_LIFETIME: u32 = DAY_IN_LEDGERS * DEFAULT_TTL_DAYS;
+// Only extend TTL on read if remaining TTL drops below this threshold (7 days)
+#[allow(dead_code)]
+const MIN_TTL_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 
 /// Get the TTL in ledgers for the configured number of days.
 fn get_ttl_lifetime(env: &Env) -> u32 {
@@ -90,16 +101,84 @@ fn get_ttl_lifetime(env: &Env) -> u32 {
 pub struct Storage;
 
 impl Storage {
-    /// Return `true` if the admin key exists in instance storage.
+    /// Return `true` if admin council is initialized (has >=1 admins).
     pub fn has_admin(env: &Env) -> bool {
-        env.storage().instance().has(&StorageKey::Admin)
+        if let Ok(council) = Self::get_admin_council(env) {
+            !council.is_empty()
+        } else {
+            false
+        }
     }
 
-    /// Persist `admin` in instance storage and refresh the instance TTL.
+    /// Legacy: Persist single `admin` (deprecated, use AdminCouncil).
     pub fn set_admin(env: &Env, admin: &Address) {
         let ttl = get_ttl_lifetime(env);
-        env.storage().instance().set(&StorageKey::Admin, admin);
+        let mut council = Vec::new(env);
+        council.push_back(admin.clone());
+        Self::set_admin_council(env, &council);
+    }
+
+    /// Retrieve the admin council (Vec<Address>).
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if council key absent.
+    pub fn get_admin_council(env: &Env) -> Result<AdminCouncil, Error> {
+        env.storage()
+            .instance()
+            .get(&amp;StorageKey::AdminCouncil)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Persist the admin council and refresh TTL.
+    pub fn set_admin_council(env: &amp;Env, council: &amp;AdminCouncil) {
+        let ttl = get_ttl_lifetime(env);
+        env.storage().instance().set(&amp;StorageKey::AdminCouncil, council);
         env.storage().instance().extend_ttl(ttl, ttl);
+    }
+
+    /// Return true if `address` is an admin in the council.
+    pub fn is_admin(env: &amp;Env, address: &amp;Address) -> bool {
+        if let Ok(council) = Self::get_admin_council(env) {
+            for admin in council.iter() {
+                if admin == address {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Add `admin` to council if not already present.
+    pub fn add_admin(env: &amp;Env, admin: &amp;Address) {
+        let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
+        let mut found = false;
+        for a in council.iter() {
+            if a == admin {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            council.push_back(admin.clone());
+            Self::set_admin_council(env, &amp;council);
+        }
+    }
+
+    /// Remove `admin` from council if present.
+    pub fn remove_admin(env: &amp;Env, admin: &amp;Address) {
+        let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
+        let mut new_council = Vec::new(env);
+        let mut found = false;
+        for a in council.iter() {
+            if a != admin {
+                new_council.push_back(a.clone());
+            } else {
+                found = true;
+            }
+        }
+        if found {
+            Self::set_admin_council(env, &amp;new_council);
+        }
     }
 
     /// Persist `version` in instance storage alongside the admin.
@@ -142,15 +221,14 @@ impl Storage {
         env.storage().instance().get(&StorageKey::TtlConfig)
     }
 
-    /// Retrieve the admin address.
+    /// Retrieve the primary admin address (council[0]).
     ///
+    /// Backward compatible with single-admin. Returns Error if council empty.
     /// # Errors
-    /// - [`Error::NotInitialized`] — admin key is absent.
+    /// - [`Error::NotInitialized`] — council empty.
     pub fn get_admin(env: &Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(Error::NotInitialized)
+        let council = Self::get_admin_council(env)?;
+        council.first().cloned().ok_or(Error::NotInitialized)
     }
 
     /// Return `true` if `address` is in the issuer registry.
@@ -205,46 +283,25 @@ impl Storage {
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 
-    /// Retrieve an attestation by `id`.
-    ///
-    /// Extends the entry's TTL on every successful read so that frequently
-    /// accessed attestations are not evicted while still in active use.
-    /// The threshold and extension amount match the write-path constants,
-    /// meaning a read is never more expensive than a write in terms of
-    /// storage rent.
+    /// Retrieve an attestation by `id`. TTL is not extended on read to reduce
+    /// compute costs; TTL will be refreshed when the attestation is modified.
     ///
     /// # Errors
     /// - [`Error::NotFound`] — no attestation with that ID exists.
     pub fn get_attestation(env: &Env, id: &String) -> Result<Attestation, Error> {
         let key = StorageKey::Attestation(id.clone());
-        let attestation = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
-        // Extend TTL on read so hot attestations stay alive without a write.
-        let ttl = get_ttl_lifetime(env);
-        env.storage().persistent().extend_ttl(&key, ttl, ttl);
-        Ok(attestation)
+        env.storage().persistent().get(&key).ok_or(Error::NotFound)
     }
 
     /// Return the ordered list of attestation IDs for `subject`, or an empty
-    /// [`Vec`] if none exist.
-    ///
-    /// Extends the index TTL on read using the same threshold and amount as
-    /// write operations — no additional storage cost beyond what a write incurs.
+    /// [`Vec`] if none exist. TTL is only extended on index modification,
+    /// not on read, to reduce compute costs for frequent queries.
     pub fn get_subject_attestations(env: &Env, subject: &Address) -> Vec<String> {
         let key = StorageKey::SubjectAttestations(subject.clone());
-        let list = env
-            .storage()
+        env.storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(env));
-        if env.storage().persistent().has(&key) {
-            let ttl = get_ttl_lifetime(env);
-            env.storage().persistent().extend_ttl(&key, ttl, ttl);
-        }
-        list
+            .unwrap_or(Vec::new(env))
     }
 
     /// Append `attestation_id` to `subject`'s attestation index and refresh TTL.
@@ -257,23 +314,48 @@ impl Storage {
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 
-    /// Return the ordered list of attestation IDs created by `issuer`, or an
-    /// empty [`Vec`] if none exist.
+    /// Remove `attestation_id` from `subject`'s attestation index.
+    pub fn remove_subject_attestation(env: &Env, subject: &Address, attestation_id: &String) {
+        let key = StorageKey::SubjectAttestations(subject.clone());
+        let ttl = get_ttl_lifetime(env);
+        let existing = Self::get_subject_attestations(env, subject);
+        let mut updated = Vec::new(env);
+        for id in existing.iter() {
+            if &id != attestation_id {
+                updated.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&key, &updated);
+        env.storage().persistent().extend_ttl(&key, ttl, ttl);
+    }
+
+    /// Remove `attestation_id` from `issuer`'s attestation index.
     ///
-    /// Extends the index TTL on read using the same threshold and amount as
-    /// write operations — no additional storage cost beyond what a write incurs.
+    /// Note: this does not delete the attestation record; it only removes the ID
+    /// from the issuer's listing index so pagination results shrink.
+    pub fn remove_issuer_attestation(env: &Env, issuer: &Address, attestation_id: &String) {
+        let key = StorageKey::IssuerAttestations(issuer.clone());
+        let ttl = get_ttl_lifetime(env);
+        let existing = Self::get_issuer_attestations(env, issuer);
+        let mut updated = Vec::new(env);
+        for id in existing.iter() {
+            if &id != attestation_id {
+                updated.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&key, &updated);
+        env.storage().persistent().extend_ttl(&key, ttl, ttl);
+    }
+
+    /// Return the ordered list of attestation IDs created by `issuer`, or an
+    /// empty [`Vec`] if none exist. TTL is only extended on index modification,
+    /// not on read, to reduce compute costs for frequent queries.
     pub fn get_issuer_attestations(env: &Env, issuer: &Address) -> Vec<String> {
         let key = StorageKey::IssuerAttestations(issuer.clone());
-        let list = env
-            .storage()
+        env.storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(env));
-        if env.storage().persistent().has(&key) {
-            let ttl = get_ttl_lifetime(env);
-            env.storage().persistent().extend_ttl(&key, ttl, ttl);
-        }
-        list
+            .unwrap_or(Vec::new(env))
     }
 
     /// Append `attestation_id` to `issuer`'s attestation index and refresh TTL.
@@ -283,6 +365,21 @@ impl Storage {
         let mut attestations = Self::get_issuer_attestations(env, issuer);
         attestations.push_back(attestation_id.clone());
         env.storage().persistent().set(&key, &attestations);
+        env.storage().persistent().extend_ttl(&key, ttl, ttl);
+    }
+
+    /// Remove `attestation_id` from `issuer`'s attestation index.
+    pub fn remove_issuer_attestation(env: &Env, issuer: &Address, attestation_id: &String) {
+        let key = StorageKey::IssuerAttestations(issuer.clone());
+        let ttl = get_ttl_lifetime(env);
+        let existing = Self::get_issuer_attestations(env, issuer);
+        let mut updated = Vec::new(env);
+        for id in existing.iter() {
+            if &id != attestation_id {
+                updated.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&key, &updated);
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 
@@ -338,97 +435,45 @@ impl Storage {
             .unwrap_or(Vec::new(env))
     }
 
-    /// Persist a [`MultiSigProposal`] and refresh its TTL.
-    pub fn set_multisig_proposal(env: &Env, proposal: &MultiSigProposal) {
-        let key = StorageKey::MultiSigProposal(proposal.id.clone());
-        let ttl = get_ttl_lifetime(env);
+    /// Persist the admin council configuration.
+    pub fn set_council(env: &Env, council: &AdminCouncil) {
+        env.storage().instance().set(&StorageKey::AdminCouncil, council);
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME, INSTANCE_LIFETIME);
+    }
+
+    /// Retrieve the admin council, or `None` if not initialized.
+    pub fn get_council(env: &Env) -> Option<AdminCouncil> {
+        env.storage().instance().get(&StorageKey::AdminCouncil)
+    }
+
+    /// Persist a council proposal.
+    pub fn set_proposal(env: &Env, proposal: &CouncilProposal) {
+        let key = StorageKey::CouncilProposal(proposal.id);
         env.storage().persistent().set(&key, proposal);
-        env.storage().persistent().extend_ttl(&key, ttl, ttl);
+        env.storage().persistent().extend_ttl(&key, INSTANCE_LIFETIME, INSTANCE_LIFETIME);
     }
 
-    /// Retrieve a [`MultiSigProposal`] by ID.
-    ///
-    /// # Errors
-    /// - [`Error::NotFound`] — no proposal with that ID exists.
-    pub fn get_multisig_proposal(env: &Env, id: &String) -> Result<MultiSigProposal, Error> {
-        env.storage()
-            .persistent()
-            .get(&StorageKey::MultiSigProposal(id.clone()))
-            .ok_or(Error::NotFound)
+    /// Retrieve a council proposal by ID.
+    pub fn get_proposal(env: &Env, id: u32) -> Option<CouncilProposal> {
+        env.storage().persistent().get(&StorageKey::CouncilProposal(id))
     }
 
-    /// Return `true` if a proposal with `id` exists.
-    pub fn has_multisig_proposal(env: &Env, id: &String) -> bool {
-        env.storage()
-            .persistent()
-            .has(&StorageKey::MultiSigProposal(id.clone()))
+    /// Increment and return the next proposal ID.
+    pub fn next_proposal_id(env: &Env) -> u32 {
+        let current: u32 = env.storage().instance().get(&StorageKey::ProposalCounter).unwrap_or(0);
+        let next = current + 1;
+        env.storage().instance().set(&StorageKey::ProposalCounter, &next);
+        next
     }
 
-    /// Return the ordered list of endorsements for `attestation_id`, or an empty
-    /// [`Vec`] if none exist.
-    pub fn get_endorsements(env: &Env, attestation_id: &String) -> Vec<Endorsement> {
-        env.storage()
-            .persistent()
-            .get(&StorageKey::Endorsements(attestation_id.clone()))
-            .unwrap_or(Vec::new(env))
+    /// Set the contract paused flag.
+    pub fn set_paused(env: &Env, paused: bool) {
+        env.storage().instance().set(&StorageKey::Paused, &paused);
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME, INSTANCE_LIFETIME);
     }
 
-    /// Append `endorsement` to the endorsement list for its attestation and refresh TTL.
-    pub fn add_endorsement(env: &Env, endorsement: &Endorsement) {
-        let key = StorageKey::Endorsements(endorsement.attestation_id.clone());
-        let ttl = get_ttl_lifetime(env);
-        let mut endorsements = Self::get_endorsements(env, &endorsement.attestation_id);
-        endorsements.push_back(endorsement.clone());
-        env.storage().persistent().set(&key, &endorsements);
-        env.storage().persistent().extend_ttl(&key, ttl, ttl);
-    }
-
-    /// Retrieve the global contract statistics, returning zeroed defaults if not yet set.
-    pub fn get_global_stats(env: &Env) -> GlobalStats {
-        env.storage()
-            .instance()
-            .get(&StorageKey::GlobalStats)
-            .unwrap_or(GlobalStats {
-                total_attestations: 0,
-                total_revocations: 0,
-                total_issuers: 0,
-            })
-    }
-
-    /// Persist updated global stats to instance storage and refresh TTL.
-    fn set_global_stats(env: &Env, stats: &GlobalStats) {
-        let ttl = get_ttl_lifetime(env);
-        env.storage()
-            .instance()
-            .set(&StorageKey::GlobalStats, stats);
-        env.storage().instance().extend_ttl(ttl, ttl);
-    }
-
-    /// Increment `total_attestations` by `count`.
-    pub fn increment_total_attestations(env: &Env, count: u64) {
-        let mut stats = Self::get_global_stats(env);
-        stats.total_attestations += count;
-        Self::set_global_stats(env, &stats);
-    }
-
-    /// Increment `total_revocations` by `count`.
-    pub fn increment_total_revocations(env: &Env, count: u64) {
-        let mut stats = Self::get_global_stats(env);
-        stats.total_revocations += count;
-        Self::set_global_stats(env, &stats);
-    }
-
-    /// Increment `total_issuers` by 1 when a new issuer is registered.
-    pub fn increment_total_issuers(env: &Env) {
-        let mut stats = Self::get_global_stats(env);
-        stats.total_issuers += 1;
-        Self::set_global_stats(env, &stats);
-    }
-
-    /// Decrement `total_issuers` by 1 when an issuer is removed (saturating at 0).
-    pub fn decrement_total_issuers(env: &Env) {
-        let mut stats = Self::get_global_stats(env);
-        stats.total_issuers = stats.total_issuers.saturating_sub(1);
-        Self::set_global_stats(env, &stats);
+    /// Return `true` if the contract is paused.
+    pub fn is_paused(env: &Env) -> bool {
+        env.storage().instance().get(&StorageKey::Paused).unwrap_or(false)
     }
 }

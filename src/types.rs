@@ -1,13 +1,61 @@
-//! Shared data types and error definitions for TrustLink.
+//! Shared data types for TrustLink.
 //!
-//! Defines [`Attestation`], [`AttestationStatus`], [`Error`], and supporting
-//! structs used throughout the contract. All types are annotated with
-//! `#[contracttype]` or `#[contracterror]` for Soroban ABI compatibility.
+//! Defines [`Attestation`], [`AttestationStatus`], and supporting structs used
+//! throughout the contract. All types are annotated with `#[contracttype]` for
+//! Soroban ABI compatibility. Error definitions live in [`crate::errors`].
 
-use soroban_sdk::{contracterror, contracttype, xdr::ToXdr, Address, Bytes, Env, String, Vec};
+use soroban_sdk::{contracttype, xdr::ToXdr, Address, Bytes, Env, String, Vec};
+
+pub use crate::errors::Error;
 
 /// Default lifetime for a multi-sig proposal: 7 days in seconds.
 pub const MULTISIG_PROPOSAL_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Default lifetime for an attestation request: 7 days in seconds.
+pub const ATTESTATION_REQUEST_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Status of an attestation request.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum RequestStatus {
+    Pending = 0,
+    Fulfilled = 1,
+    Rejected = 2,
+}
+
+/// A pull-based attestation request submitted by a subject to a registered issuer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationRequest {
+    /// Unique deterministic ID (hash of subject | issuer | claim_type | timestamp).
+    pub id: String,
+    pub subject: Address,
+    pub issuer: Address,
+    pub claim_type: String,
+    pub timestamp: u64,
+    /// Unix timestamp after which the request expires if not acted on.
+    pub expires_at: u64,
+    pub status: RequestStatus,
+    /// Rejection reason set by the issuer, if rejected.
+    pub rejection_reason: Option<String>,
+}
+
+/// Trust tier assigned to a registered issuer.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum IssuerTier {
+    Basic = 0,
+    Verified = 1,
+    Premium = 2,
+}
+
+impl IssuerTier {
+    pub fn rank(self) -> u32 {
+        self as u32
+    }
+}
+
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,42 +72,53 @@ pub struct ClaimTypeInfo {
     pub description: String,
 }
 
+/// The admin council configuration: member list and quorum threshold.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct IssuerMetadata {
-    pub name: String,
-    pub url: String,
-    pub description: String,
+pub struct AdminCouncil {
+    /// Addresses eligible to vote on council proposals.
+    pub members: Vec<Address>,
+    /// Minimum approvals required to execute a proposal.
+    pub quorum: u32,
 }
 
+/// Operations that require council quorum approval.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeeConfig {
-    pub attestation_fee: i128,
-    pub fee_collector: Address,
-    pub fee_token: Option<Address>,
+pub enum CouncilOperation {
+    RemoveIssuer(Address),
+    PauseContract,
 }
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TtlConfig {
-    pub ttl_days: u32,
-}
-
-/// Global contract statistics for dashboards and analytics.
+/// Describes how an attestation entered the system.
 ///
-/// Maintained atomically on every mutating operation and queryable without auth.
+/// Replaces the previous `imported: bool` and `bridged: bool` fields, which
+/// were mutually exclusive and left the "native" state implicit.
+///
+/// # Variants
+/// - `Native`   — created directly by a registered issuer via `create_attestation`.
+/// - `Imported` — migrated from an external verified source by the admin via `import_attestation`.
+/// - `Bridged`  — mirrored from another chain by a trusted bridge contract via `bridge_attestation`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GlobalStats {
-    /// Total number of attestations ever created (includes imported, bridged, and multi-sig).
-    pub total_attestations: u64,
-    /// Total number of attestations that have been revoked.
-    pub total_revocations: u64,
-    /// Current number of registered issuers (incremented on register, decremented on remove).
-    pub total_issuers: u64,
+pub enum AttestationOrigin {
+    Native,
+    Imported,
+    Bridged,
+/// Lightweight health status returned by `health_check`.
+///
+/// No authentication required — designed for monitoring dashboards and uptime probes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CouncilProposal {
+    pub id: u32,
+    pub operation: CouncilOperation,
+    pub proposer: Address,
+    pub approvals: Vec<Address>,
+    pub executed: bool,
 }
 
+/// A single attestation record stored on-chain.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Attestation {
@@ -74,13 +133,18 @@ pub struct Attestation {
     /// Deleted attestations are excluded from all query results.
     pub deleted: bool,
     pub metadata: Option<String>,
+    pub jurisdiction: Option<String>,
     pub valid_from: Option<u64>,
-    pub imported: bool,
-    pub bridged: bool,
+    /// How this attestation entered the system. Replaces the former `imported`
+    /// and `bridged` boolean fields.
+    pub origin: AttestationOrigin,
     pub source_chain: Option<String>,
     pub source_tx: Option<String>,
     pub tags: Option<Vec<String>>,
     pub revocation_reason: Option<String>,
+    /// True when the subject has requested GDPR deletion of this attestation.
+    /// Deleted attestations are excluded from all query results.
+    pub deleted: bool,
 }
 
 #[contracttype]
@@ -92,50 +156,72 @@ pub enum AttestationStatus {
     Pending,
 }
 
+/// The action recorded in an audit log entry.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuditAction {
+    Created,
+    Revoked,
+    Renewed,
+    Updated,
+    Transferred,
+}
+
+/// A single immutable entry in an attestation's audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditEntry {
+    pub action: AuditAction,
+    pub actor: Address,
+    pub timestamp: u64,
+    pub details: Option<String>,
+}
+
 /// A social-proof endorsement of an existing attestation by a registered issuer.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Endorsement {
-    /// The ID of the attestation being endorsed.
     pub attestation_id: String,
-    /// The issuer who is endorsing the attestation.
     pub endorser: Address,
-    /// Ledger timestamp when the endorsement was recorded.
     pub timestamp: u64,
 }
 
-/// A multi-sig attestation proposal that becomes active once `threshold` issuers have co-signed.
+/// Configurable storage limits to prevent exhaustion attacks.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MultiSigProposal {
-    /// Unique proposal identifier (hash of proposer+subject+claim_type+timestamp).
-    pub id: String,
-    /// The issuer who created the proposal.
-    pub proposer: Address,
-    /// The subject the attestation is about.
-    pub subject: Address,
-    /// The claim type being attested.
-    pub claim_type: String,
-    /// All addresses that must co-sign (includes proposer).
-    pub required_signers: Vec<Address>,
-    /// Number of signers needed to activate the attestation.
-    pub threshold: u32,
-    /// Addresses that have already signed (proposer signs on creation).
-    pub signers: Vec<Address>,
-    /// Ledger timestamp when the proposal was created.
-    pub created_at: u64,
-    /// Ledger timestamp after which the proposal expires if not completed.
-    pub expires_at: u64,
-    /// Whether the proposal has been finalized into an active attestation.
-    pub finalized: bool,
+pub struct StorageLimits {
+    /// Maximum number of attestations a single issuer may create. Default: 10,000.
+    pub max_attestations_per_issuer: u32,
+    /// Maximum number of attestations a single subject may hold. Default: 100.
+    pub max_attestations_per_subject: u32,
 }
 
+impl Default for StorageLimits {
+    fn default() -> Self {
+        Self {
+            max_attestations_per_issuer: 10_000,
+            max_attestations_per_subject: 100,
+        }
+    }
+}
+
+/// Delegation from an issuer to a sub-issuer for specific claim types.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Delegation {
+    /// Issuer delegating authority.
+    pub delegator: Address,
+    /// Sub-issuer receiving delegation.
+    pub delegate: Address,
+    /// Specific claim type this delegation covers.
+    pub claim_type: String,
+    /// Optional expiration timestamp for this delegation.
+    pub expiration: Option<u64>,
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
     AlreadyInitialized = 1,
     NotInitialized = 2,
-    /// Caller lacks required permissions. Includes rejection when `issuer` equals `subject` in `create_attestation`.
     Unauthorized = 3,
     NotFound = 4,
     DuplicateAttestation = 5,
@@ -143,42 +229,40 @@ pub enum Error {
     Expired = 7,
     InvalidValidFrom = 8,
     InvalidExpiration = 9,
-    MetadataTooLong = 10,
-    InvalidTimestamp = 11,
-    InvalidFee = 12,
-    FeeTokenRequired = 13,
-    TooManyTags = 14,
-    TagTooLong = 15,
-    /// Threshold must be >= 1 and <= number of required signers.
-    InvalidThreshold = 16,
-    /// The signer is not in the proposal's required_signers list.
-    NotRequiredSigner = 17,
-    /// The signer has already co-signed this proposal.
-    AlreadySigned = 18,
-    /// The proposal has already been finalized.
-    ProposalFinalized = 19,
-    /// The proposal has expired without reaching threshold.
-    ProposalExpired = 20,
-    /// The revocation reason exceeds the maximum allowed length of 128 characters.
-    ReasonTooLong = 21,
+    /// Council quorum not yet reached for this proposal.
+    QuorumNotReached = 11,
+    /// Proposal has already been executed.
+    AlreadyExecuted = 12,
+    /// Caller already approved this proposal.
+    AlreadyApproved = 13,
+    /// Council has not been initialized.
+    CouncilNotInitialized = 14,
+    /// Quorum threshold exceeds member count or is zero.
+    InvalidQuorum = 15,
 }
 
+#[contracttype]
+pub type AdminCouncil = Vec<Address>;
+
 impl Attestation {
-    /// Hash `payload` with SHA-256 and return the result as a 64-char hex [`String`].
+    /// Hashes an arbitrary byte payload and returns a 32-character lowercase hex string.
+    ///
+    /// Algorithm: SHA-256 over the XDR-encoded payload, digest truncated to the first 16 bytes,
+    /// hex-encoded to a 32-character lowercase string.
     pub fn hash_payload(env: &Env, payload: &Bytes) -> String {
         let hash = env.crypto().sha256(payload).to_array();
         const HEX: &[u8; 16] = b"0123456789abcdef";
-
         let mut hex = [0u8; 64];
         for i in 0..32 {
             hex[i * 2] = HEX[(hash[i] >> 4) as usize];
             hex[i * 2 + 1] = HEX[(hash[i] & 0x0f) as usize];
         }
-
         String::from_bytes(env, &hex)
     }
 
-    /// Generate a deterministic attestation ID from issuer + subject + claim_type + timestamp.
+    /// Generates a deterministic attestation ID from the given inputs.
+    ///
+    /// XDR field order: `issuer | subject | claim_type | timestamp`
     pub fn generate_id(
         env: &Env,
         issuer: &Address,
@@ -194,7 +278,9 @@ impl Attestation {
         Self::hash_payload(env, &payload)
     }
 
-    /// Generate a deterministic bridge attestation ID.
+    /// Generates a deterministic bridge attestation ID from the given inputs.
+    ///
+    /// XDR field order: `bridge | subject | claim_type | source_chain | source_tx | timestamp`
     pub fn generate_bridge_id(
         env: &Env,
         bridge: &Address,
@@ -220,23 +306,38 @@ impl Attestation {
                 return AttestationStatus::Pending;
             }
         }
-
         if self.revoked {
             return AttestationStatus::Revoked;
         }
-
         if let Some(expiration) = self.expiration {
             if current_time >= expiration {
                 return AttestationStatus::Expired;
             }
         }
-
         AttestationStatus::Valid
     }
 }
 
+impl AttestationRequest {
+    /// Deterministic ID: SHA-256 over XDR of `"req:" | subject | issuer | claim_type | timestamp`.
+    pub fn generate_id(
+        env: &Env,
+        subject: &Address,
+        issuer: &Address,
+        claim_type: &String,
+        timestamp: u64,
+    ) -> String {
+        let mut payload = Bytes::new(env);
+        payload.append(&Bytes::from_slice(env, b"req:"));
+        payload.append(&subject.clone().to_xdr(env));
+        payload.append(&issuer.clone().to_xdr(env));
+        payload.append(&claim_type.clone().to_xdr(env));
+        payload.append(&timestamp.to_xdr(env));
+        Attestation::hash_payload(env, &payload)
+    }
+}
+
 impl MultiSigProposal {
-    /// Generate a deterministic proposal ID from proposer + subject + claim_type + timestamp.
     pub fn generate_id(
         env: &Env,
         proposer: &Address,
@@ -245,7 +346,6 @@ impl MultiSigProposal {
         timestamp: u64,
     ) -> String {
         let mut payload = Bytes::new(env);
-        // Prefix to distinguish from regular attestation IDs.
         payload.append(&Bytes::from_slice(env, b"multisig:"));
         payload.append(&proposer.clone().to_xdr(env));
         payload.append(&subject.clone().to_xdr(env));
