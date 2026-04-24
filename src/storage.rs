@@ -145,19 +145,19 @@ impl Storage {
     pub fn get_admin_council(env: &Env) -> Result<AdminCouncil, Error> {
         env.storage()
             .instance()
-            .get(&amp;StorageKey::AdminCouncil)
+            .get(&StorageKey::AdminCouncil)
             .ok_or(Error::NotInitialized)
     }
 
     /// Persist the admin council and refresh TTL.
-    pub fn set_admin_council(env: &amp;Env, council: &amp;AdminCouncil) {
+    pub fn set_admin_council(env: &Env, council: &AdminCouncil) {
         let ttl = get_ttl_lifetime(env);
-        env.storage().instance().set(&amp;StorageKey::AdminCouncil, council);
+        env.storage().instance().set(&StorageKey::AdminCouncil, council);
         env.storage().instance().extend_ttl(ttl, ttl);
     }
 
     /// Return true if `address` is an admin in the council.
-    pub fn is_admin(env: &amp;Env, address: &amp;Address) -> bool {
+    pub fn is_admin(env: &Env, address: &Address) -> bool {
         if let Ok(council) = Self::get_admin_council(env) {
             for admin in council.iter() {
                 if admin == address {
@@ -169,7 +169,7 @@ impl Storage {
     }
 
     /// Add `admin` to council if not already present.
-    pub fn add_admin(env: &amp;Env, admin: &amp;Address) {
+    pub fn add_admin(env: &Env, admin: &Address) {
         let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
         let mut found = false;
         for a in council.iter() {
@@ -180,12 +180,12 @@ impl Storage {
         }
         if !found {
             council.push_back(admin.clone());
-            Self::set_admin_council(env, &amp;council);
+            Self::set_admin_council(env, &council);
         }
     }
 
     /// Remove `admin` from council if present.
-    pub fn remove_admin(env: &amp;Env, admin: &amp;Address) {
+    pub fn remove_admin(env: &Env, admin: &Address) {
         let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
         let mut new_council = Vec::new(env);
         let mut found = false;
@@ -197,7 +197,7 @@ impl Storage {
             }
         }
         if found {
-            Self::set_admin_council(env, &amp;new_council);
+            Self::set_admin_council(env, &new_council);
         }
     }
 
@@ -476,6 +476,18 @@ impl Storage {
             .instance()
             .set(&StorageKey::GlobalStats, stats);
         env.storage().instance().extend_ttl(ttl, ttl);
+    }
+
+    /// Retrieve global statistics from instance storage, returning defaults if never set.
+    pub fn get_global_stats(env: &Env) -> GlobalStats {
+        env.storage()
+            .instance()
+            .get(&StorageKey::GlobalStats)
+            .unwrap_or(GlobalStats {
+                total_attestations: 0,
+                total_revocations: 0,
+                total_issuers: 0,
+            })
     }
 
     /// Increment `total_attestations` by `count`.
