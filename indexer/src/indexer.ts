@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { rpc as SorobanRpc, scValToNative } from "@stellar/stellar-sdk";
-import { pubsub, ATTESTATION_CREATED } from "./graphql";
+import { pubsub, ATTESTATION_CREATED, ATTESTATION_REVOKED, ISSUER_REGISTERED } from "./graphql";
 
 const CONTRACT_ID = process.env.CONTRACT_ID!;
 const RPC_URL = process.env.RPC_URL ?? "https://soroban-testnet.stellar.org";
@@ -8,7 +8,7 @@ const GENESIS_LEDGER = Number(process.env.GENESIS_LEDGER ?? 0);
 const PAGE_LIMIT = 200;
 const POLL_MS = 5_000;
 
-const WATCHED = new Set(["created", "revoked", "imported", "bridged"]);
+const WATCHED = new Set(["created", "revoked", "imported", "bridged", "iss_reg"]);
 
 export async function startIndexer(db: PrismaClient): Promise<void> {
   const rpc = new SorobanRpc.Server(RPC_URL, { allowHttp: true });
@@ -81,27 +81,47 @@ async function handleEvent(
 ): Promise<void> {
   if (!ev.topic.length) return;
 
-  // topic[0] is the event name symbol; topic[1] (when present) is subject/issuer address.
   const topicStr = scValToNative(ev.topic[0]) as string;
   if (!WATCHED.has(topicStr)) return;
 
   const data = scValToNative(ev.value) as unknown[];
 
   if (topicStr === "revoked") {
-    // data: [attestation_id, reason?]
     const attestationId = String(data[0]);
+    const attestation = await db.attestation.findUnique({
+      where: { id: attestationId },
+    });
+    
     await db.attestation.updateMany({
       where: { id: attestationId },
       data: { isRevoked: true },
+    });
+
+    if (attestation) {
+      pubsub.publish(ATTESTATION_REVOKED, {
+        onAttestationRevoked: {
+          id: attestationId,
+          issuer: attestation.issuer,
+          revokedAt: new Date().toISOString(),
+        },
+      });
+    }
+    return;
+  }
+
+  if (topicStr === "iss_reg") {
+    const issuer = ev.topic[1] ? String(scValToNative(ev.topic[1])) : "";
+    pubsub.publish(ISSUER_REGISTERED, {
+      onIssuerRegistered: {
+        issuer,
+        registeredAt: new Date().toISOString(),
+      },
     });
     return;
   }
 
   // "created" | "imported" | "bridged"
-  // topic[1] = subject address
   const subject = ev.topic[1] ? String(scValToNative(ev.topic[1])) : "";
-
-  // data: [id, issuer, claimType, timestamp, ...extras]
   const [id, issuer, claimType, rawTs] = data as [string, string, string, bigint | number];
   const timestamp = BigInt(rawTs);
 
@@ -132,7 +152,6 @@ async function handleEvent(
     },
   });
 
-  // Publish to GraphQL subscriptions
   pubsub.publish(ATTESTATION_CREATED, {
     onAttestationCreated: {
       ...attestation,
