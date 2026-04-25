@@ -111,19 +111,6 @@ impl Events {
         );
     }
 
-    pub fn deletion_requested(
-        env: &Env,
-        subject: &Address,
-        attestation_id: &String,
-        timestamp: u64,
-    ) {
-        // TOPIC_DEL_REQ
-        env.events().publish(
-            (symbol_short!("del_req"), subject.clone()),
-            (attestation_id.clone(), timestamp),
-        );
-    }
-
     pub fn attestation_expired(env: &Env, attestation_id: &String, subject: &Address) {
         // TOPIC_EXPIRED
         env.events().publish(
