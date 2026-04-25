@@ -10,7 +10,6 @@ import {
 
 const CONTRACT_ID = process.env.CONTRACT_ID!;
 const RPC_URL = process.env.RPC_URL ?? "https://soroban-testnet.stellar.org";
-const GENESIS_LEDGER = Number(process.env.GENESIS_LEDGER ?? 0);
 const PAGE_LIMIT = 200;
 const POLL_MS = 5_000;
 
@@ -32,7 +31,12 @@ export async function startIndexer(db: PrismaClient): Promise<void> {
   const { sequence: tip } = await rpc.getLatestLedger();
   if (cursor <= tip) {
     console.log(`Backfilling ledgers ${cursor}–${tip}…`);
-    cursor = await processRange(db, rpc, cursor, tip);
+    try {
+      cursor = await processRange(db, rpc, cursor, tip);
+    } catch (err) {
+      console.error("Error during backfill:", err);
+      // Continue with live polling even if backfill fails
+    }
   }
 
   // ── Live polling ───────────────────────────────────────────────────────────
@@ -56,17 +60,50 @@ async function processRange(
   to: number
 ): Promise<number> {
   let startLedger = from;
+  let processedCount = 0;
 
   while (startLedger <= to) {
-    const response = await rpc.getEvents({
-      startLedger,
-      endLedger: Math.min(startLedger + PAGE_LIMIT - 1, to),
-      filters: [{ type: "contract", contractIds: [CONTRACT_ID] }],
-      limit: PAGE_LIMIT,
-    });
+    const endLedger = Math.min(startLedger + PAGE_LIMIT - 1, to);
+    
+    try {
+      const response = await rpc.getEvents({
+        startLedger,
+        endLedger,
+        filters: [{ type: "contract", contractIds: [CONTRACT_ID] }],
+        limit: PAGE_LIMIT,
+      });
 
-    for (const ev of response.events) {
-      await handleEvent(db, ev);
+      for (const ev of response.events) {
+        try {
+          await handleEvent(db, ev);
+          processedCount++;
+        } catch (err) {
+          console.error(`Error processing event at ledger ${ev.ledger}:`, err);
+          // Continue processing other events
+        }
+      }
+
+      const lastProcessed =
+        response.events.length > 0
+          ? response.events[response.events.length - 1].ledger
+          : endLedger;
+
+      startLedger = lastProcessed + 1;
+
+      await db.checkpoint.upsert({
+        where: { id: 1 },
+        update: { ledger: lastProcessed },
+        create: { id: 1, ledger: lastProcessed },
+      });
+
+      if (processedCount % 100 === 0) {
+        console.log(`Processed ${processedCount} events, checkpoint: ${lastProcessed}`);
+      }
+    } catch (err) {
+      console.error(`Error fetching events from ledger ${startLedger} to ${endLedger}:`, err);
+      // Retry with exponential backoff
+      await sleep(1000);
+      continue;
     }
 
     const lastProcessed =
@@ -84,6 +121,7 @@ async function processRange(
     });
   }
 
+  console.log(`Completed processing range ${from}–${to}, total events: ${processedCount}`);
   return to + 1;
 }
 
@@ -95,7 +133,6 @@ async function handleEvent(
 ): Promise<void> {
   if (!ev.topic.length) return;
 
-  // topic[0] is the event name symbol; topic[1] (when present) is subject/issuer address.
   const topicStr = scValToNative(ev.topic[0]) as string;
   if (!WATCHED.has(topicStr)) return;
 
@@ -153,8 +190,11 @@ async function handleEvent(
   }
 
   if (topicStr === "revoked") {
-    // data: [attestation_id, reason?]
     const attestationId = String(data[0]);
+    const attestation = await db.attestation.findUnique({
+      where: { id: attestationId },
+    });
+    
     await db.attestation.updateMany({
       where: { id: attestationId },
       data: { isRevoked: true },
@@ -164,10 +204,7 @@ async function handleEvent(
   }
 
   // "created" | "imported" | "bridged"
-  // topic[1] = subject address
   const subject = ev.topic[1] ? String(scValToNative(ev.topic[1])) : "";
-
-  // data: [id, issuer, claimType, timestamp, ...extras]
   const [id, issuer, claimType, rawTs] = data as [string, string, string, bigint | number];
   const timestamp = BigInt(rawTs);
 

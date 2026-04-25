@@ -66,21 +66,54 @@ async function main() {
     "/attestations/:subject",
     async (req) => {
       return db.attestation.findMany({
-        where: { subject: req.params.subject },
+        where: { subject: req.params.address },
         orderBy: { timestamp: "desc" },
       });
     }
   );
 
-  fastify.get<{ Params: { issuer: string } }>(
-    "/attestations/issuer/:issuer",
+  // GET /subjects/:address/claims/:claim_type/valid - Check if subject has valid claim
+  fastify.get<{ Params: { address: string; claim_type: string } }>(
+    "/subjects/:address/claims/:claim_type/valid",
+    async (req) => {
+      const attestation = await db.attestation.findFirst({
+        where: {
+          subject: req.params.address,
+          claimType: req.params.claim_type,
+          isRevoked: false,
+        },
+      });
+      return { valid: !!attestation };
+    }
+  );
+
+  // GET /issuers/:address/attestations - Get all attestations issued by an issuer
+  fastify.get<{ Params: { address: string } }>(
+    "/issuers/:address/attestations",
     async (req) => {
       return db.attestation.findMany({
-        where: { issuer: req.params.issuer },
+        where: { issuer: req.params.address },
         orderBy: { timestamp: "desc" },
       });
     }
   );
+
+  // GET /stats - Get global statistics
+  fastify.get("/stats", async () => {
+    const [total, revoked, issuers] = await Promise.all([
+      db.attestation.count(),
+      db.attestation.count({ where: { isRevoked: true } }),
+      db.attestation.findMany({
+        distinct: ["issuer"],
+        select: { issuer: true },
+      }),
+    ]);
+    return {
+      total_attestations: total,
+      total_revocations: revoked,
+      total_issuers: issuers.length,
+    };
+  });
 
   const REST_PORT = Number(process.env.PORT ?? 3000);
   await fastify.listen({ port: REST_PORT, host: "0.0.0.0" });
