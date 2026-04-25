@@ -28,7 +28,7 @@ jobs:
       - name: Build
         working-directory: examples/react-app
         env:
-          VITE_CONTRACT_ID: ${{ secrets.VITE_CONTRACT_ID }}
+          VITE_CONTRACT_ID: ${{ secrets.VITE_CONTRACT_ID || '' }}
           VITE_RPC_URL: ${{ secrets.VITE_RPC_URL || 'https://soroban-testnet.stellar.org' }}
         run: npm run build
 
