@@ -14,7 +14,7 @@ const GENESIS_LEDGER = Number(process.env.GENESIS_LEDGER ?? 0);
 const PAGE_LIMIT = 200;
 const POLL_MS = 5_000;
 
-const WATCHED = new Set(["created", "revoked", "imported", "bridged"]);
+const WATCHED = new Set(["created", "revoked", "imported", "bridged", "ms_prop", "ms_sign", "ms_actv"]);
 
 let lastLedger = 0;
 
@@ -101,6 +101,56 @@ async function handleEvent(
 
   eventsProcessedTotal.inc();
   const data = scValToNative(ev.value) as unknown[];
+
+  // Handle multi-sig events
+  if (topicStr === "ms_prop") {
+    // data: [proposal_id, proposer, threshold]
+    const proposalId = String(data[0]);
+    const proposer = String(data[1]);
+    const threshold = Number(data[2]);
+    const subject = ev.topic[1] ? String(scValToNative(ev.topic[1])) : "";
+
+    // For now, we'll store basic proposal info. Full details would come from contract state.
+    await db.multisigProposal.upsert({
+      where: { id: proposalId },
+      update: {},
+      create: {
+        id: proposalId,
+        subject,
+        proposer,
+        claimType: "", // Will be updated when we get more info
+        threshold,
+        signers: [proposer],
+        signatureCount: 1,
+        expiresAt: BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60), // 7 days
+      },
+    });
+    return;
+  }
+
+  if (topicStr === "ms_sign") {
+    // data: [proposal_id, signatures_so_far, threshold]
+    const proposalId = String(data[0]);
+    const signatureCount = Number(data[1]);
+
+    await db.multisigProposal.update({
+      where: { id: proposalId },
+      data: { signatureCount },
+    });
+    return;
+  }
+
+  if (topicStr === "ms_actv") {
+    // data: [proposal_id, attestation_id]
+    const proposalId = String(data[0]);
+
+    await db.multisigProposal.update({
+      where: { id: proposalId },
+      data: { finalized: true },
+    });
+    attestationsTotal.inc();
+    return;
+  }
 
   if (topicStr === "revoked") {
     // data: [attestation_id, reason?]
