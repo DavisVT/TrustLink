@@ -234,7 +234,7 @@ impl TrustLinkContract {
         let mut council: AdminCouncil = Vec::new(&env);
         council.push_back(admin.clone());
         Storage::set_admin_council(&env, &council);
-        Storage::set_version(&env, &String::from_str(&env, "1.0.0"));
+        Storage::set_version(&env, &String::from_str(&env, "0.1.0"));
         Storage::set_fee_config(&env, &default_fee_config(&admin));
         let days = ttl_days.unwrap_or(30);
         Storage::set_ttl_config(&env, &TtlConfig { ttl_days: days });

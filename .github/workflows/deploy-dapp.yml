@@ -28,20 +28,9 @@ jobs:
       - name: Build
         working-directory: examples/react-app
         env:
-          VITE_CONTRACT_ID: ${{ secrets.VITE_CONTRACT_ID }}
-          VITE_RPC_URL: ${{ secrets.VITE_RPC_URL }}
-        run: |
-          export VITE_CONTRACT_ID="${VITE_CONTRACT_ID:-}"
-          export VITE_RPC_URL="${VITE_RPC_URL:-https://soroban-testnet.stellar.org}"
-          npm run build
-
-      - name: Commit and push
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add -A
-          git diff --staged --quiet || git commit -m "Auto-build dApp files"
-          git push
+          VITE_CONTRACT_ID: ${{ secrets.VITE_CONTRACT_ID || '' }}
+          VITE_RPC_URL: ${{ secrets.VITE_RPC_URL || 'https://soroban-testnet.stellar.org' }}
+        run: npm run build
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
