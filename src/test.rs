@@ -887,7 +887,7 @@ fn test_imported_attestation_is_queryable_like_native() {
     assert!(client.has_valid_claim(&subject, &claim_type));
     assert_eq!(client.get_subject_attestations(&subject, &0, &10).len(), 1);
     assert_eq!(client.get_issuer_attestations(&issuer, &0, &10).len(), 1);
-    assert_eq!(client.get_attestation_by_type(&subject, &claim_type).id, id);
+    assert_eq!(client.get_attestation_by_type(&subject, &claim_type).unwrap().id, id);
 }
 
 #[test]

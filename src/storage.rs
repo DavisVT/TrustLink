@@ -32,7 +32,8 @@ use crate::constants::{DAY_IN_LEDGERS, DEFAULT_INSTANCE_LIFETIME};
 use crate::types::{
     AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Delegation,
     Endorsement, Error, ExpirationHook, FeeConfig, GlobalStats, IssuerMetadata, IssuerStats,
-    IssuerTier, MultiSigProposal, RateLimitConfig, StorageLimits, TtlConfig,
+    IssuerTier, MultiSigProposal, PendingAdminTransfer, RateLimitConfig, StorageLimits, TtlConfig,
+    CouncilProposal,
 };
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
@@ -88,8 +89,22 @@ pub enum StorageKey {
     PendingRequests(Address),
     /// Last issuance timestamp for rate limiting (alias).
     LastIssuanceTime(Address),
-    /// Storage limits configuration (alias).
-    Limits,
+    /// Storage limits.
+    StorageLimits,
+    /// Contract paused flag.
+    Paused,
+    /// Delegation key (delegator, delegate, claim_type).
+    Delegation(Address, Address, String),
+    /// Council proposal by numeric ID.
+    CouncilProposal(u32),
+    /// Counter for council proposal IDs.
+    ProposalCounter,
+    /// Pending admin transfer (two-step pattern).
+    PendingAdminTransfer,
+    /// Attestation template key (issuer, template_name).
+    AttestationTemplate(Address, String),
+    /// List of template names for an issuer.
+    AttestationTemplateList(Address),
 }
 
 /// Get the TTL in ledgers for the configured number of days.
@@ -423,27 +438,19 @@ impl Storage {
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 
-    /// Retrieve the admin council, or `None` if not initialized.
-    pub fn get_council(env: &Env) -> Option<AdminCouncil> {
-        env.storage().instance().get(&StorageKey::AdminCouncil)
-    }
-
-    /// Enable or disable whitelist mode (alias used by lib.rs).
-    pub fn set_whitelist_enabled(env: &Env, issuer: &Address, enabled: bool) {
-        Self::set_whitelist_mode(env, issuer, enabled);
-    }
-
-    /// Return `true` if whitelist mode is enabled (alias used by lib.rs).
-    pub fn is_whitelist_enabled(env: &Env, issuer: &Address) -> bool {
-        Self::is_whitelist_mode(env, issuer)
-    }
-
     /// Return `true` if whitelist mode is enabled for `issuer`.
     pub fn is_whitelist_mode(env: &Env, issuer: &Address) -> bool {
         env.storage()
             .persistent()
             .get(&StorageKey::IssuerWhitelistMode(issuer.clone()))
             .unwrap_or(false)
+    }
+
+    /// Return `true` if `subject` is on `issuer`'s whitelist.
+    pub fn is_whitelisted(env: &Env, issuer: &Address, subject: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::IssuerWhitelist(issuer.clone(), subject.clone()))
     }
 
     /// Remove `subject` from `issuer`'s whitelist.
@@ -453,16 +460,19 @@ impl Storage {
             .remove(&StorageKey::IssuerWhitelist(issuer.clone(), subject.clone()));
     }
 
-    /// Return `true` if `subject` is whitelisted for `issuer`.
-    pub fn is_whitelisted(env: &Env, issuer: &Address, subject: &Address) -> bool {
-        env.storage()
-            .persistent()
-            .has(&StorageKey::IssuerWhitelist(issuer.clone(), subject.clone()))
+    /// Retrieve the admin council, or `None` if not initialized.
+    pub fn get_council(env: &Env) -> Option<AdminCouncil> {
+        env.storage().instance().get(&StorageKey::AdminCouncil)
     }
 
-    /// Remove `attestation_id` from `issuer`'s attestation index.
-    pub fn remove_issuer_attestation(env: &Env, issuer: &Address, attestation_id: &String) {
-        let key = StorageKey::IssuerAttestations(issuer.clone());
+    /// Persist the admin council (alias for set_admin_council).
+    pub fn set_council(env: &Env, council: &AdminCouncil) {
+        Self::set_admin_council(env, council);
+    }
+
+    /// Add `subject` to `issuer`'s whitelist.
+    pub fn add_to_whitelist(env: &Env, issuer: &Address, subject: &Address) {
+        let key = StorageKey::IssuerWhitelist(issuer.clone(), subject.clone());
         let ttl = get_ttl_lifetime(env);
         let existing = Self::get_issuer_attestations(env, issuer);
         let mut updated = Vec::new(env);
@@ -480,12 +490,36 @@ impl Storage {
         env.storage().persistent().get(&StorageKey::CouncilProposal(id))
     }
 
+    /// Persist a council proposal.
+    pub fn set_proposal(env: &Env, proposal: &CouncilProposal) {
+        let key = StorageKey::CouncilProposal(proposal.id);
+        let ttl = get_ttl_lifetime(env);
+        env.storage().persistent().set(&key, proposal);
+        env.storage().persistent().extend_ttl(&key, ttl, ttl);
+    }
+
     /// Increment and return the next proposal ID.
     pub fn next_proposal_id(env: &Env) -> u32 {
         let current: u32 = env.storage().instance().get(&StorageKey::ProposalCounter).unwrap_or(0);
         let next = current + 1;
         env.storage().instance().set(&StorageKey::ProposalCounter, &next);
         next
+    }
+
+    // ── Pending admin transfer (two-step pattern) ─────────────────────────────
+
+    pub fn get_pending_admin_transfer(env: &Env) -> Option<PendingAdminTransfer> {
+        env.storage().instance().get(&StorageKey::PendingAdminTransfer)
+    }
+
+    pub fn set_pending_admin_transfer(env: &Env, transfer: &PendingAdminTransfer) {
+        let ttl = get_ttl_lifetime(env);
+        env.storage().instance().set(&StorageKey::PendingAdminTransfer, transfer);
+        env.storage().instance().extend_ttl(ttl, ttl);
+    }
+
+    pub fn remove_pending_admin_transfer(env: &Env) {
+        env.storage().instance().remove(&StorageKey::PendingAdminTransfer);
     }
 
     /// Set the contract paused flag.
@@ -608,32 +642,7 @@ impl Storage {
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
     }
 
-    pub fn get_issuer_tier(env: &Env, issuer: &Address) -> Option<IssuerTier> {
-        env.storage()
-            .persistent()
-            .get(&StorageKey::IssuerTier(issuer.clone()))
-    }
-
-    // -------------------------------------------------------------------------
-    // Pause
-    // -------------------------------------------------------------------------
-
-    pub fn set_paused(env: &Env, paused: bool) {
-        let ttl = get_ttl_lifetime(env);
-        env.storage().instance().set(&StorageKey::Paused, &paused);
-        env.storage().instance().extend_ttl(ttl, ttl);
-    }
-
-    pub fn is_paused(env: &Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Paused)
-            .unwrap_or(false)
-    }
-
-    // -------------------------------------------------------------------------
-    // Storage limits
-    // -------------------------------------------------------------------------
+    // ── Storage limits ────────────────────────────────────────────────────────
 
     pub fn get_limits(env: &Env) -> StorageLimits {
         env.storage()
