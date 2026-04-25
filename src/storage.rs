@@ -28,6 +28,7 @@
 //! - `FeeConfig` — global attestation fee settings.
 //! - `GlobalStats` — running counters for total attestations, revocations, and issuers.
 
+use crate::constants::{DAY_IN_LEDGERS, DEFAULT_INSTANCE_LIFETIME};
 use crate::types::{
     AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Delegation,
     Endorsement, Error, ExpirationHook, FeeConfig, GlobalStats, IssuerMetadata, IssuerStats,
@@ -83,11 +84,6 @@ pub enum StorageKey {
     Delegation(Address, Address, String),
     Paused,
 }
-
-const DEFAULT_INSTANCE_LIFETIME: u32 = DAY_IN_LEDGERS * DEFAULT_TTL_DAYS;
-// Only extend TTL on read if remaining TTL drops below this threshold (7 days)
-#[allow(dead_code)]
-const MIN_TTL_THRESHOLD: u32 = MIN_TTL_THRESHOLD_LEDGERS;
 
 /// Get the TTL in ledgers for the configured number of days.
 fn get_ttl_lifetime(env: &Env) -> u32 {

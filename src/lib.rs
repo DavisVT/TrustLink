@@ -4,6 +4,7 @@
 mod errors;
 mod events;
 mod storage;
+mod constants;
 pub mod types;
 mod validation;
 
@@ -12,6 +13,7 @@ mod test;
 
 use soroban_sdk::{contract, contractimpl, token::TokenClient, Address, Env, String, Vec};
 
+use crate::constants::SECS_PER_DAY;
 use crate::events::Events;
 use crate::storage::Storage;
 use crate::types::{
