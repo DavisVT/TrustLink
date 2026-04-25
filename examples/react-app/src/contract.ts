@@ -203,3 +203,51 @@ export async function rejectRequest(
     optStr(reason)
   );
 }
+
+// ── multi-sig proposals ──────────────────────────────────────────────────────
+
+export interface MultiSigProposal {
+  id: string;
+  proposer: string;
+  subject: string;
+  claim_type: string;
+  required_signers: string[];
+  signers: string[];
+  threshold: number;
+  expires_at: bigint;
+  finalized: boolean;
+}
+
+export async function proposeAttestation(
+  proposer: string,
+  subject: string,
+  claimType: string,
+  requiredSigners: string[],
+  threshold: number
+): Promise<string> {
+  return invoke(
+    proposer,
+    "propose_attestation",
+    addr(proposer),
+    addr(subject),
+    str(claimType),
+    nativeToScVal(requiredSigners.map((s) => Address.fromString(s).toScVal()), { type: "vec" }),
+    nativeToScVal(threshold, { type: "u32" })
+  );
+}
+
+export async function cosignAttestation(
+  signer: string,
+  proposalId: string
+): Promise<void> {
+  return invoke(
+    signer,
+    "cosign_attestation",
+    addr(signer),
+    str(proposalId)
+  );
+}
+
+export async function getMultiSigProposal(proposalId: string): Promise<MultiSigProposal> {
+  return simulate("get_multisig_proposal", str(proposalId));
+}
