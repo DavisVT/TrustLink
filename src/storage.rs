@@ -483,6 +483,19 @@ impl Storage {
         env.storage().instance().extend_ttl(ttl, ttl);
     }
 
+    /// Retrieve global statistics from instance storage, returning defaults if never set.
+    pub fn get_global_stats(env: &Env) -> GlobalStats {
+        env.storage()
+            .instance()
+            .get(&StorageKey::GlobalStats)
+            .unwrap_or(GlobalStats {
+                total_attestations: 0,
+                total_revocations: 0,
+                total_issuers: 0,
+            })
+    }
+
+    /// Increment `total_attestations` by `count`.
     pub fn increment_total_attestations(env: &Env, count: u64) {
         let mut stats = Self::get_global_stats(env);
         stats.total_attestations = stats.total_attestations.saturating_add(count);
