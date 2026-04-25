@@ -192,6 +192,22 @@ pub struct Endorsement {
     pub timestamp: u64,
 }
 
+/// A multi-signature attestation proposal requiring threshold signatures.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigProposal {
+    pub id: String,
+    pub proposer: Address,
+    pub subject: Address,
+    pub claim_type: String,
+    pub required_signers: Vec<Address>,
+    pub threshold: u32,
+    pub signers: Vec<Address>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub finalized: bool,
+}
+
 /// Configurable storage limits to prevent exhaustion attacks.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,14 +231,42 @@ impl Default for StorageLimits {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Delegation {
-    /// Issuer delegating authority.
     pub delegator: Address,
-    /// Sub-issuer receiving delegation.
     pub delegate: Address,
-    /// Specific claim type this delegation covers.
     pub claim_type: String,
-    /// Optional expiration timestamp for this delegation.
     pub expiration: Option<u64>,
+}
+
+/// A multi-sig attestation proposal requiring M-of-N issuer signatures.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigProposal {
+    pub id: String,
+    pub proposer: Address,
+    pub subject: Address,
+    pub claim_type: String,
+    pub required_signers: Vec<Address>,
+    pub threshold: u32,
+    pub signers: Vec<Address>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub finalized: bool,
+}
+
+/// A multi-sig attestation proposal requiring M-of-N issuer signatures.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigProposal {
+    pub id: String,
+    pub proposer: Address,
+    pub subject: Address,
+    pub claim_type: String,
+    pub required_signers: Vec<Address>,
+    pub threshold: u32,
+    pub signers: Vec<Address>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub finalized: bool,
 }
 
 /// A multi-sig attestation proposal requiring M-of-N issuer signatures.
@@ -334,6 +378,22 @@ impl AttestationRequest {
         payload.append(&timestamp.to_xdr(env));
         Attestation::hash_payload(env, &payload)
     }
+}
+
+/// A multi-sig attestation proposal requiring M-of-N issuer signatures.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigProposal {
+    pub id: String,
+    pub proposer: Address,
+    pub subject: Address,
+    pub claim_type: String,
+    pub required_signers: Vec<Address>,
+    pub threshold: u32,
+    pub signers: Vec<Address>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub finalized: bool,
 }
 
 impl MultiSigProposal {
