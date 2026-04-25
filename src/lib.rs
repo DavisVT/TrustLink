@@ -728,6 +728,13 @@ impl TrustLinkContract {
         if Storage::has_attestation(env, &attestation_id) {
             return Err(Error::DuplicateAttestation);
         }
+        
+        // Reject subject if issuer has whitelist mode enabled and subject is not listed
+        if Storage::is_whitelist_mode(&env, &issuer)
+            && !Storage::is_whitelisted(&env, &issuer, &subject)
+        {
+            return Err(Error::SubjectNotWhitelisted);
+        }
 
         let attestation = Attestation {
             id: attestation_id.clone(),
@@ -1505,8 +1512,12 @@ impl TrustLinkContract {
     pub fn register_claim_type(env: Env, admin: Address, claim_type: String, description: String) -> Result<(), Error> {
         admin.require_auth();
         Validation::require_admin(&env, &admin)?;
-        validate_claim_type(&claim_type)?;
-        let info = ClaimTypeInfo { claim_type: claim_type.clone(), description: description.clone() };
+        Validation::validate_claim_type(&claim_type)?;
+
+        let info = ClaimTypeInfo {
+            claim_type: claim_type.clone(),
+            description: description.clone(),
+        };
         Storage::set_claim_type(&env, &info);
         Events::claim_type_registered(&env, &claim_type, &description);
         Ok(())
