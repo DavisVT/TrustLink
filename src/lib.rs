@@ -16,7 +16,7 @@ use crate::events::Events;
 use crate::storage::Storage;
 use crate::types::{
     AdminCouncil, Attestation, AttestationRequest, AttestationStatus, AuditAction, AuditEntry, ClaimTypeInfo,
-    ContractConfig, ContractMetadata, Delegation, Endorsement, Error, FeeConfig, GlobalStats, HealthStatus,
+    ContractConfig, ContractMetadata, Endorsement, Error, FeeConfig, GlobalStats, HealthStatus,
     IssuerMetadata, IssuerStats, IssuerTier, MultiSigProposal, RateLimitConfig, RequestStatus,
     StorageLimits, TtlConfig, ATTESTATION_REQUEST_TTL_SECS, MULTISIG_PROPOSAL_TTL_SECS,
 };
@@ -310,41 +310,16 @@ impl TrustLinkContract {
         Ok(())
     }
 
-    /// Add `subject` to the calling issuer's whitelist.
+    /// Update the trust tier of an already-registered issuer.
     ///
     /// # Errors
-    /// - [`Error::Unauthorized`] — `issuer` is not a registered issuer.
-    pub fn add_to_whitelist(env: Env, issuer: Address, subject: Address) -> Result<(), Error> {
-        issuer.require_auth();
-        Validation::require_issuer(&env, &issuer)?;
-        Storage::add_subject_to_whitelist(&env, &issuer, &subject);
-        Ok(())
-    }
-
-    /// Remove `subject` from the calling issuer's whitelist.
-    ///
-    /// # Errors
-    /// - [`Error::Unauthorized`] — `issuer` is not a registered issuer.
-    pub fn remove_from_whitelist(env: Env, issuer: Address, subject: Address) -> Result<(), Error> {
-        issuer.require_auth();
-        Validation::require_issuer(&env, &issuer)?;
-        Storage::remove_subject_from_whitelist(&env, &issuer, &subject);
-        Ok(())
-    }
-
-    /// Return `true` if `subject` is on `issuer`'s whitelist.
-    #[must_use]
-    pub fn is_whitelisted(env: Env, issuer: Address, subject: Address) -> bool {
-        Storage::is_subject_whitelisted(&env, &issuer, &subject)
-    }
-
-    /// Return `true` if whitelist mode is enabled for `issuer`.
-    #[must_use]
-    pub fn is_whitelist_enabled(env: Env, issuer: Address) -> bool {
-        Storage::is_whitelist_enabled(&env, &issuer)
-    }
-
-    pub fn update_issuer_tier(env: Env, admin: Address, issuer: Address, tier: IssuerTier) -> Result<(), Error> {
+    /// - [`Error::Unauthorized`] — `issuer` is not registered.
+    pub fn update_issuer_tier(
+        env: Env,
+        admin: Address,
+        issuer: Address,
+        tier: IssuerTier,
+    ) -> Result<(), Error> {
         admin.require_auth();
         Validation::require_admin(&env, &admin)?;
         Validation::require_issuer(&env, &issuer)?;
@@ -851,72 +826,6 @@ impl TrustLinkContract {
         Ok(())
     }
 
-    pub fn revoke_attestations_batch(
-        env: Env,
-        issuer: Address,
-        attestation_ids: Vec<String>,
-        reason: Option<String>,
-    ) -> Result<u32, Error> {
-        const MAX_BATCH: u32 = 50;
-        issuer.require_auth();
-        Validation::require_issuer(&env, &issuer)?;
-        validate_reason(&reason)?;
-
-        if attestation_ids.len() > MAX_BATCH {
-            return Err(Error::BatchTooLarge);
-        }
-
-        // Validate all first (atomic — no partial writes).
-        for id in attestation_ids.iter() {
-            let attestation = Storage::get_attestation(&env, &id)?;
-            if attestation.issuer != issuer {
-                return Err(Error::Unauthorized);
-            }
-            if attestation.revoked {
-                return Err(Error::AlreadyRevoked);
-            }
-        }
-
-        let mut count: u32 = 0;
-        for id in attestation_ids.iter() {
-            let mut attestation = Storage::get_attestation(&env, &id)?;
-            attestation.revoked = true;
-            attestation.revocation_reason = reason.clone();
-            Storage::set_attestation(&env, &attestation);
-            Storage::remove_subject_attestation(&env, &attestation.subject, &id);
-            Storage::remove_issuer_attestation(&env, &issuer, &id);
-            Events::attestation_revoked(&env, &id, &issuer, &reason);
-            Storage::append_audit_entry(&env, &id, &AuditEntry {
-                action: AuditAction::Revoked,
-                actor: issuer.clone(),
-                timestamp: env.ledger().timestamp(),
-                details: reason.clone(),
-            });
-            count += 1;
-        }
-        Storage::increment_total_revocations(&env, count as u64);
-        Ok(count)
-    }
-
-    /// GDPR right-to-erasure soft delete. Only the subject of the attestation
-    /// may call this. Sets `deleted = true` and emits a `deletion_requested` event.
-    /// Deleted attestations are excluded from all query results.
-    pub fn request_deletion(
-        env: Env,
-        subject: Address,
-        attestation_id: String,
-    ) -> Result<(), Error> {
-        subject.require_auth();
-        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
-        if attestation.subject != subject {
-            return Err(Error::Unauthorized);
-        }
-        attestation.deleted = true;
-        Storage::set_attestation(&env, &attestation);
-        Events::deletion_requested(&env, &attestation_id, &subject);
-        Ok(())
-    }
-
     pub fn renew_attestation(
         env: Env,
         issuer: Address,
@@ -945,6 +854,83 @@ impl TrustLinkContract {
             details: None,
         });
         Ok(())
+    }
+
+    /// Revoke multiple attestations in a single atomic call (issuer only).
+    ///
+    /// Authorization is checked once for the issuer. If any attestation does
+    /// not belong to the caller or is already revoked the entire batch is
+    /// rolled back — no partial writes occur.
+    ///
+    /// Max batch size is 50. Passing more IDs returns [`Error::BatchTooLarge`].
+    ///
+    /// Emits one `revoked` event per attestation.
+    ///
+    /// # Parameters
+    /// - `issuer` — authorized issuer (must authorize).
+    /// - `attestation_ids` — list of IDs to revoke (max 50).
+    /// - `reason` — optional human-readable reason stored in the event data.
+    ///
+    /// # Returns
+    /// Count of revoked attestations.
+    ///
+    /// # Errors
+    /// - [`Error::BatchTooLarge`] — more than 50 IDs supplied.
+    /// - [`Error::Unauthorized`] — issuer is not registered or does not own an attestation.
+    /// - [`Error::NotFound`] — an ID does not exist.
+    /// - [`Error::AlreadyRevoked`] — an attestation is already revoked.
+    pub fn revoke_attestations_batch(
+        env: Env,
+        issuer: Address,
+        attestation_ids: Vec<String>,
+        reason: Option<String>,
+    ) -> Result<u32, Error> {
+        const MAX_BATCH: u32 = 50;
+
+        issuer.require_auth();
+        Validation::require_issuer(&env, &issuer)?;
+        validate_reason(&reason)?;
+
+        if attestation_ids.len() > MAX_BATCH {
+            return Err(Error::LimitExceeded);
+        }
+
+        // Validate all attestations first (atomic — no partial writes)
+        for id in attestation_ids.iter() {
+            let attestation = Storage::get_attestation(&env, &id)?;
+            if attestation.issuer != issuer {
+                return Err(Error::Unauthorized);
+            }
+            if attestation.revoked {
+                return Err(Error::AlreadyRevoked);
+            }
+        }
+
+        // All checks passed — apply writes
+        let mut count: u32 = 0;
+        for id in attestation_ids.iter() {
+            let mut attestation = Storage::get_attestation(&env, &id)?;
+            attestation.revoked = true;
+            attestation.revocation_reason = reason.clone();
+            Storage::set_attestation(&env, &attestation);
+            Storage::remove_subject_attestation(&env, &attestation.subject, &id);
+            Storage::remove_issuer_attestation(&env, &issuer, &id);
+            Events::attestation_revoked_with_reason(&env, &id, &issuer, &reason);
+            Storage::append_audit_entry(
+                &env,
+                &id,
+                &AuditEntry {
+                    action: AuditAction::Revoked,
+                    actor: issuer.clone(),
+                    timestamp: env.ledger().timestamp(),
+                    details: reason.clone(),
+                },
+            );
+            count += 1;
+        }
+
+        Storage::increment_total_revocations(&env, count as u64);
+        Ok(count)
     }
 
     pub fn has_valid_claim_from_issuer(
@@ -1960,7 +1946,7 @@ impl TrustLinkContract {
                 action: AuditAction::Transferred,
                 actor: admin.clone(),
                 timestamp,
-                details: Some(new_issuer.to_string()),
+                details: None,
             },
         );
 
