@@ -277,6 +277,19 @@ impl Events {
         );
     }
 
+    /// Emitted when admin transfers an attestation to a new issuer.
+    pub fn attestation_transferred(
+        env: &Env,
+        attestation_id: &String,
+        old_issuer: &Address,
+        new_issuer: &Address,
+    ) {
+        env.events().publish(
+            (symbol_short!("att_xfer"), old_issuer.clone()),
+            (attestation_id.clone(), new_issuer.clone()),
+        );
+    }
+
     /// Emitted when a registered issuer endorses an existing attestation.
     pub fn attestation_endorsed(
         env: &Env,
@@ -323,7 +336,7 @@ impl Events {
     pub fn contract_paused(env: &Env, admin: &Address, timestamp: u64) {
         // TOPIC_PAUSED
         env.events()
-            .publish((symbol_short!("paused"),), (admin.clone(), timestamp));
+            .publish((symbol_short!("paused"), admin.clone()), timestamp);
     }
 
     /// Emitted when the admin unpauses the contract.
@@ -425,5 +438,22 @@ impl Events {
             symbol_short!("wl_rem")
         };
         env.events().publish((sym, issuer.clone()), subject.clone());
+    }
+
+    /// Emitted when an attestation is transferred from one issuer to another.
+    ///
+    /// **Event Schema:**
+    /// - **Topics:** `("att_xfer", old_issuer: Address)`
+    /// - **Data:** `(attestation_id: String, new_issuer: Address)`
+    pub fn attestation_transferred(
+        env: &Env,
+        attestation_id: &String,
+        old_issuer: &Address,
+        new_issuer: &Address,
+    ) {
+        env.events().publish(
+            (symbol_short!("att_xfer"), old_issuer.clone()),
+            (attestation_id.clone(), new_issuer.clone()),
+        );
     }
 }
