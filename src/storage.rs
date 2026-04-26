@@ -30,8 +30,8 @@
 
 use crate::constants::{DAY_IN_LEDGERS, DEFAULT_INSTANCE_LIFETIME};
 use crate::types::{
-    AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo, Delegation,
-    Endorsement, Error, ExpirationHook, FeeConfig, GlobalStats, IssuerMetadata, IssuerStats,
+    AdminCouncil, Attestation, AttestationRequest, AuditEntry, ClaimTypeInfo,
+    Error, ExpirationHook, FeeConfig, GlobalStats, IssuerMetadata, IssuerStats,
     IssuerTier, MultiSigProposal, PendingAdminTransfer, RateLimitConfig, StorageLimits, TtlConfig,
     CouncilProposal,
 };
@@ -144,7 +144,7 @@ impl Storage {
 
     /// Legacy: Persist single `admin` (deprecated, use AdminCouncil).
     pub fn set_admin(env: &Env, admin: &Address) {
-        let ttl = get_ttl_lifetime(env);
+        let _ttl = get_ttl_lifetime(env);
         let mut council = Vec::new(env);
         council.push_back(admin.clone());
         Self::set_admin_council(env, &council);
@@ -198,7 +198,7 @@ impl Storage {
 
     /// Remove `admin` from council if present.
     pub fn remove_admin(env: &Env, admin: &Address) {
-        let mut council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
+        let council = Self::get_admin_council(env).unwrap_or(Vec::new(env));
         let mut new_council = Vec::new(env);
         let mut found = false;
         for a in council.iter() {
