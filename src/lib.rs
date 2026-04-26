@@ -1213,6 +1213,85 @@ impl TrustLinkContract {
         Ok(count)
     }
 
+    /// Transfer attestation ownership from the current issuer to a new registered issuer.
+    ///
+    /// This is an admin-only operation used for compromised issuer recovery and
+    /// attestation reassignment. The function securely transfers ownership by:
+    /// - Updating the attestation issuer field
+    /// - Removing the ID from the old issuer's attestation index
+    /// - Adding the ID to the new issuer's attestation index
+    /// - Recalculating and persisting IssuerStats for both issuers
+    /// - Emitting an attestation_transferred event
+    /// - Appending a Transferred audit log entry
+    ///
+    /// # Parameters
+    /// - `admin` — contract administrator (must authorize)
+    /// - `attestation_id` — ID of the attestation to transfer
+    /// - `new_issuer` — address of the new issuer (must be registered)
+    ///
+    /// # Returns
+    /// `Ok(())` on success
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not admin
+    /// - [`Error::NotFound`] — attestation does not exist
+    /// - [`Error::Unauthorized`] — new_issuer is not registered
+    ///
+    /// # Idempotency
+    /// If old_issuer == new_issuer, the function succeeds without making changes.
+    pub fn transfer_attestation(
+        env: Env,
+        admin: Address,
+        attestation_id: String,
+        new_issuer: Address,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        Validation::require_admin(&env, &admin)?;
+        Validation::require_issuer(&env, &new_issuer)?;
+
+        let mut attestation = Storage::get_attestation(&env, &attestation_id)?;
+        let old_issuer = attestation.issuer.clone();
+
+        // Idempotent: if already owned by new_issuer, nothing to do
+        if old_issuer == new_issuer {
+            return Ok(());
+        }
+
+        // Update attestation issuer field
+        attestation.issuer = new_issuer.clone();
+        Storage::set_attestation(&env, &attestation);
+
+        // Update indexes: remove from old issuer, add to new issuer
+        Storage::remove_issuer_attestation(&env, &old_issuer, &attestation_id);
+        Storage::add_issuer_attestation(&env, &new_issuer, &attestation_id);
+
+        // Update IssuerStats for both issuers
+        let mut old_stats = Storage::get_issuer_stats(&env, &old_issuer);
+        old_stats.total_issued = old_stats.total_issued.saturating_sub(1);
+        Storage::set_issuer_stats(&env, &old_issuer, &old_stats);
+
+        let mut new_stats = Storage::get_issuer_stats(&env, &new_issuer);
+        new_stats.total_issued = new_stats.total_issued.saturating_add(1);
+        Storage::set_issuer_stats(&env, &new_issuer, &new_stats);
+
+        // Emit event
+        Events::attestation_transferred(&env, &attestation_id, &old_issuer, &new_issuer);
+
+        // Append audit log entry
+        Storage::append_audit_entry(
+            &env,
+            &attestation_id,
+            &AuditEntry {
+                action: AuditAction::Transferred,
+                actor: admin.clone(),
+                timestamp: env.ledger().timestamp(),
+                details: Some(String::from_str(&env, &new_issuer.to_string())),
+            },
+        );
+
+        Ok(())
+    }
+
     /// GDPR right-to-erasure soft delete. Only the subject of the attestation
     /// may call this. Sets `deleted = true` and emits a `deletion_requested` event.
     /// Deleted attestations are excluded from all query results.
