@@ -123,6 +123,20 @@ fn validate_native_expiration(env: &Env, expiration: Option<u64>) -> Result<(), 
     Ok(())
 }
 
+/// Validate that `valid_from`, when provided, is strictly in the future.
+///
+/// A `valid_from` equal to or before the current ledger timestamp would
+/// immediately resolve to `Valid`, making the field meaningless. Callers
+/// that want an immediately-active attestation should omit `valid_from`.
+fn validate_valid_from(env: &Env, valid_from: Option<u64>) -> Result<(), Error> {
+    if let Some(vf) = valid_from {
+        if vf <= env.ledger().timestamp() {
+            return Err(Error::InvalidValidFrom);
+        }
+    }
+    Ok(())
+}
+
 fn validate_import_timestamps(env: &Env, timestamp: u64, expiration: Option<u64>) -> Result<(), Error> {
     if timestamp > env.ledger().timestamp() {
         return Err(Error::InvalidTimestamp);
@@ -769,6 +783,7 @@ impl TrustLinkContract {
         metadata: Option<String>,
         jurisdiction: Option<String>,
         tags: Option<Vec<String>>,
+        valid_from: Option<u64>,
     ) -> Result<String, Error> {
         issuer.require_auth();
         Validation::require_not_paused(&env)?;
@@ -778,6 +793,7 @@ impl TrustLinkContract {
         validate_jurisdiction(env, &jurisdiction)?;
         validate_tags(&tags)?;
         validate_native_expiration(env, expiration)?;
+        validate_valid_from(env, valid_from)?;
 
         if issuer == subject {
             return Err(Error::Unauthorized);
@@ -824,7 +840,7 @@ impl TrustLinkContract {
             deleted: false,
             metadata,
             jurisdiction,
-            valid_from: None,
+            valid_from,
             origin: AttestationOrigin::Native,
             source_chain: None,
             source_tx: None,
@@ -864,7 +880,30 @@ impl TrustLinkContract {
         metadata: Option<String>,
         tags: Option<Vec<String>>,
     ) -> Result<String, Error> {
-        Self::create_attestation_internal(&env, issuer, subject, claim_type, expiration, metadata, None, tags)
+        Self::create_attestation_internal(&env, issuer, subject, claim_type, expiration, metadata, None, tags, None)
+    }
+
+    /// Create an attestation that becomes active only at `valid_from`.
+    ///
+    /// Until `valid_from` is reached the attestation has status `Pending` and
+    /// `has_valid_claim` returns `false` for it. Once the ledger timestamp
+    /// reaches `valid_from` the status automatically resolves to `Valid`
+    /// (assuming it is not revoked or expired).
+    ///
+    /// # Errors
+    /// - [`Error::InvalidValidFrom`] — `valid_from` is not strictly in the future.
+    /// - All errors from [`create_attestation`].
+    pub fn create_attestation_with_valid_from(
+        env: Env,
+        issuer: Address,
+        subject: Address,
+        claim_type: String,
+        expiration: Option<u64>,
+        metadata: Option<String>,
+        tags: Option<Vec<String>>,
+        valid_from: u64,
+    ) -> Result<String, Error> {
+        Self::create_attestation_internal(&env, issuer, subject, claim_type, expiration, metadata, None, tags, Some(valid_from))
     }
 
     pub fn create_attestation_jurisdiction(
@@ -877,7 +916,7 @@ impl TrustLinkContract {
         jurisdiction: Option<String>,
         tags: Option<Vec<String>>,
     ) -> Result<String, Error> {
-        Self::create_attestation_internal(&env, issuer, subject, claim_type, expiration, metadata, jurisdiction, tags)
+        Self::create_attestation_internal(&env, issuer, subject, claim_type, expiration, metadata, jurisdiction, tags, None)
     }
 
     pub fn create_attestations_batch(
