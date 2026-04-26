@@ -7,8 +7,9 @@ import { WebSocketServer } from "ws";
 import { useServer } from "graphql-ws/use/ws";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { startIndexer } from "./indexer";
+import { startIndexer, getLastLedger } from "./indexer";
 import { buildResolvers } from "./graphql";
+import { getMetrics } from "./metrics";
 
 const db = new PrismaClient();
 
@@ -27,25 +28,92 @@ async function main() {
   // ── REST (Fastify) ─────────────────────────────────────────────────────────
   const fastify = Fastify({ logger: true });
 
+  fastify.get("/health", async () => {
+    let dbConnected = false;
+    try {
+      await db.$queryRaw`SELECT 1`;
+      dbConnected = true;
+    } catch {
+      dbConnected = false;
+    }
+    return {
+      status: "ok",
+      lastLedger: getLastLedger(),
+      dbConnected,
+    };
+  });
+
+  fastify.get("/ready", async () => {
+    const checkpoint = await db.checkpoint.findUnique({ where: { id: 1 } });
+    const rpc = new (await import("@stellar/stellar-sdk")).rpc.Server(
+      process.env.RPC_URL ?? "https://soroban-testnet.stellar.org",
+      { allowHttp: true }
+    );
+    const { sequence: tip } = await rpc.getLatestLedger();
+    const lag = tip - (checkpoint?.ledger ?? 0);
+    if (lag <= 10) {
+      return { status: 200 };
+    }
+    return { status: 503 };
+  });
+
+  fastify.get("/metrics", async () => {
+    const metrics = await getMetrics();
+    return metrics;
+  });
+
   fastify.get<{ Params: { subject: string } }>(
     "/attestations/:subject",
     async (req) => {
       return db.attestation.findMany({
-        where: { subject: req.params.subject },
+        where: { subject: req.params.address },
         orderBy: { timestamp: "desc" },
       });
     }
   );
 
-  fastify.get<{ Params: { issuer: string } }>(
-    "/attestations/issuer/:issuer",
+  // GET /subjects/:address/claims/:claim_type/valid - Check if subject has valid claim
+  fastify.get<{ Params: { address: string; claim_type: string } }>(
+    "/subjects/:address/claims/:claim_type/valid",
+    async (req) => {
+      const attestation = await db.attestation.findFirst({
+        where: {
+          subject: req.params.address,
+          claimType: req.params.claim_type,
+          isRevoked: false,
+        },
+      });
+      return { valid: !!attestation };
+    }
+  );
+
+  // GET /issuers/:address/attestations - Get all attestations issued by an issuer
+  fastify.get<{ Params: { address: string } }>(
+    "/issuers/:address/attestations",
     async (req) => {
       return db.attestation.findMany({
-        where: { issuer: req.params.issuer },
+        where: { issuer: req.params.address },
         orderBy: { timestamp: "desc" },
       });
     }
   );
+
+  // GET /stats - Get global statistics
+  fastify.get("/stats", async () => {
+    const [total, revoked, issuers] = await Promise.all([
+      db.attestation.count(),
+      db.attestation.count({ where: { isRevoked: true } }),
+      db.attestation.findMany({
+        distinct: ["issuer"],
+        select: { issuer: true },
+      }),
+    ]);
+    return {
+      total_attestations: total,
+      total_revocations: revoked,
+      total_issuers: issuers.length,
+    };
+  });
 
   const REST_PORT = Number(process.env.PORT ?? 3000);
   await fastify.listen({ port: REST_PORT, host: "0.0.0.0" });

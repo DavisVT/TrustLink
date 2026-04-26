@@ -59,13 +59,6 @@ impl Events {
         );
     }
 
-    pub fn deletion_requested(env: &Env, attestation_id: &String, subject: &Address) {
-        env.events().publish(
-            (symbol_short!("del_req"), subject.clone()),
-            attestation_id.clone(),
-        );
-    }
-
     pub fn attestation_revoked(env: &Env, attestation_id: &String, issuer: &Address, reason: &Option<String>) {
         env.events().publish(
             (TOPIC_REVOKED, issuer.clone()),
@@ -205,6 +198,14 @@ impl Events {
         env.events().publish(
             (TOPIC_ADM_XFER,),
             (old_admin.clone(), new_admin.clone()),
+        );
+    }
+
+    /// Emitted when a two-step admin transfer is proposed.
+    pub fn admin_transfer_proposed(env: &Env, current_admin: &Address, new_admin: &Address) {
+        env.events().publish(
+            (symbol_short!("adm_prop"), current_admin.clone()),
+            new_admin.clone(),
         );
     }
 

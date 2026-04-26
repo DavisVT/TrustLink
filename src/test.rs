@@ -471,6 +471,81 @@ fn test_revoke_removes_ids_from_subject_and_issuer_indexes() {
 }
 
 #[test]
+fn test_revoke_with_reason_stores_reason_on_attestation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+    let reason = Some(String::from_str(&env, "Document expired"));
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    client.revoke_attestation(&issuer, &id, &reason);
+
+    let att = client.get_attestation(&id);
+    assert!(att.revoked);
+    assert_eq!(att.revocation_reason, reason);
+}
+
+#[test]
+fn test_revoke_without_reason_stores_none() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+    client.revoke_attestation(&issuer, &id, &None);
+
+    let att = client.get_attestation(&id);
+    assert!(att.revoked);
+    assert_eq!(att.revocation_reason, None);
+}
+
+#[test]
+fn test_revoke_reason_over_128_chars_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+
+    // 129-character reason — one over the limit
+    let too_long = Some(String::from_bytes(&env, &[b'x'; 129]));
+    let result = client.try_revoke_attestation(&issuer, &id, &too_long);
+
+    assert_eq!(result, Err(Ok(types::Error::ReasonTooLong)));
+    // Attestation must remain unrevoked
+    assert!(!client.get_attestation(&id).revoked);
+}
+
+#[test]
+fn test_revoke_reason_exactly_128_chars_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, issuer, client) = setup(&env);
+    let subject = Address::generate(&env);
+    let claim_type = String::from_str(&env, "KYC_PASSED");
+
+    let id = client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
+
+    // Exactly 128 characters — at the boundary, must succeed
+    let boundary_reason = Some(String::from_bytes(&env, &[b'r'; 128]));
+    client.revoke_attestation(&issuer, &id, &boundary_reason);
+
+    let att = client.get_attestation(&id);
+    assert!(att.revoked);
+    assert_eq!(att.revocation_reason, boundary_reason);
+}
+
+#[test]
 fn test_expired_attestation_status() {
     let env = Env::default();
     env.mock_all_auths();
@@ -812,7 +887,7 @@ fn test_imported_attestation_is_queryable_like_native() {
     assert!(client.has_valid_claim(&subject, &claim_type));
     assert_eq!(client.get_subject_attestations(&subject, &0, &10).len(), 1);
     assert_eq!(client.get_issuer_attestations(&issuer, &0, &10).len(), 1);
-    assert_eq!(client.get_attestation_by_type(&subject, &claim_type).id, id);
+    assert_eq!(client.get_attestation_by_type(&subject, &claim_type).unwrap().id, id);
 }
 
 #[test]
@@ -3414,6 +3489,7 @@ fn test_whitelist_check_before_storage_write() {
     // This must panic — no attestation should be stored
     client.create_attestation(&issuer, &subject, &claim_type, &None, &None, &None);
 }
+
 #[test]
 fn test_create_attestations_batch_empty_subjects_is_noop() {
     let env = Env::default();
@@ -3472,6 +3548,25 @@ fn test_create_attestations_batch_subject_at_limit_rolls_back_all() {
 #[test]
 fn test_create_attestations_batch_exactly_max_issuer_size_succeeds() {
     let env = Env::default();
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100_000;
+        li.min_persistent_entry_ttl = FULL_TTL;
+        li.max_entry_ttl = FULL_TTL + 1;
+    });
+    env
+}
+
+/// Advance the ledger sequence by `delta` ledgers, reducing all entry TTLs by
+/// the same amount.
+fn advance_ledger(env: &Env, delta: u32) {
+    env.ledger().with_mut(|li| {
+        li.sequence_number += delta as u64;
+    });
+}
+
+#[test]
+fn test_ttl_refreshed_on_revocation() {
+    let env = ttl_env();
     env.mock_all_auths();
     let (admin, issuer, client) = setup(&env);
     let claim_type = String::from_str(&env, "KYC_PASSED");
