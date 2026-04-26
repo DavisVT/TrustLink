@@ -13,6 +13,7 @@ import {
 
 import type {
   Attestation,
+  AttestationRequest,
   AttestationStatus,
   AuditEntry,
   ClaimTypeInfo,
@@ -335,6 +336,125 @@ export class TrustLinkClient {
     return this.simulate("get_multisig_proposal", this.str(proposalId));
   }
 
+  async proposeAttestation(
+    proposer: string,
+    subject: string,
+    claimType: string,
+    requiredSigners: string[],
+    threshold: number
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    const account = new Account(proposer, "0");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "propose_attestation",
+          this.addr(proposer),
+          this.addr(subject),
+          this.str(claimType),
+          nativeToScVal(requiredSigners.map((s) => Address.fromString(s).toScVal()), { type: "array" }),
+          this.u32(threshold)
+        )
+      )
+      .setTimeout(30)
+      .build();
+    return this.server.simulateTransaction(tx);
+  }
+
+  async cosignAttestation(
+    issuer: string,
+    proposalId: string
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    const account = new Account(issuer, "0");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call("cosign_attestation", this.addr(issuer), this.str(proposalId))
+      )
+      .setTimeout(30)
+      .build();
+    return this.server.simulateTransaction(tx);
+  }
+
+  // ── Attestation Requests ───────────────────────────────────────────────────
+
+  async requestAttestation(
+    subject: string,
+    issuer: string,
+    claimType: string
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    const account = new Account(subject, "0");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "request_attestation",
+          this.addr(subject),
+          this.addr(issuer),
+          this.str(claimType)
+        )
+      )
+      .setTimeout(30)
+      .build();
+    return this.server.simulateTransaction(tx);
+  }
+
+  async fulfillRequest(
+    issuer: string,
+    requestId: string,
+    expiration?: bigint
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    const account = new Account(issuer, "0");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "fulfill_request",
+          this.addr(issuer),
+          this.str(requestId),
+          this.optU64(expiration ?? null)
+        )
+      )
+      .setTimeout(30)
+      .build();
+    return this.server.simulateTransaction(tx);
+  }
+
+  async rejectRequest(
+    issuer: string,
+    requestId: string,
+    reason?: string
+  ): Promise<SorobanRpc.Api.SimulateTransactionResponse> {
+    const account = new Account(issuer, "0");
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "reject_request",
+          this.addr(issuer),
+          this.str(requestId),
+          this.optStr(reason ?? null)
+        )
+      )
+      .setTimeout(30)
+      .build();
+    return this.server.simulateTransaction(tx);
+  }
+
+  async getAttestationRequest(requestId: string): Promise<AttestationRequest> {
+    return this.simulate("get_attestation_request", this.str(requestId));
+  }
+
   // ── Endorsements ──────────────────────────────────────────────────────────
 
   async getEndorsements(attestationId: string): Promise<Endorsement[]> {
@@ -343,5 +463,33 @@ export class TrustLinkClient {
 
   async getEndorsementCount(attestationId: string): Promise<number> {
     return this.simulate("get_endorsement_count", this.str(attestationId));
+  }
+
+  // ── Pagination Helpers ─────────────────────────────────────────────────────
+
+  async *iterateSubjectAttestations(
+    subject: string,
+    pageSize = 20
+  ): AsyncGenerator<Attestation> {
+    let start = 0;
+    while (true) {
+      const page = await this.getSubjectAttestations(subject, start, pageSize);
+      yield* page;
+      if (page.length < pageSize) break;
+      start += page.length;
+    }
+  }
+
+  async *iterateIssuerAttestations(
+    issuer: string,
+    pageSize = 20
+  ): AsyncGenerator<Attestation> {
+    let start = 0;
+    while (true) {
+      const page = await this.getIssuerAttestations(issuer, start, pageSize);
+      yield* page;
+      if (page.length < pageSize) break;
+      start += page.length;
+    }
   }
 }
