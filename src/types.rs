@@ -292,52 +292,19 @@ pub struct Delegation {
     pub expiration: Option<u64>,
 }
 
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Error {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    Unauthorized = 3,
-    NotFound = 4,
-    DuplicateAttestation = 5,
-    AlreadyRevoked = 6,
-    Expired = 7,
-    InvalidValidFrom = 8,
-    InvalidExpiration = 9,
-    MetadataTooLong = 10,
-    InvalidTimestamp = 11,
-    InvalidFee = 12,
-    FeeTokenRequired = 13,
-    TooManyTags = 14,
-    TagTooLong = 15,
-    /// Threshold must be >= 1 and <= number of required signers.
-    InvalidThreshold = 16,
-    /// The signer is not in the proposal's required_signers list.
-    NotRequiredSigner = 17,
-    /// The signer has already co-signed this proposal.
-    AlreadySigned = 18,
-    /// The proposal has already been finalized.
-    ProposalFinalized = 19,
-    /// The proposal has expired without reaching threshold.
-    ProposalExpired = 20,
-    /// The contract is paused and cannot accept state-changing operations.
-    ContractPaused = 21,
-}
-
-/// A multi-sig attestation proposal requiring M-of-N issuer signatures.
+/// A reusable per-issuer blueprint for attestation creation.
+///
+/// Issuers define a template once and instantiate attestations from it,
+/// optionally overriding individual fields per call.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MultiSigProposal {
-    pub id: String,
-    pub proposer: Address,
-    pub subject: Address,
+pub struct AttestationTemplate {
+    /// Non-empty claim type identifier (e.g. "KYC", "AML").
     pub claim_type: String,
-    pub required_signers: Vec<Address>,
-    pub threshold: u32,
-    pub signers: Vec<Address>,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub finalized: bool,
+    /// Optional default expiration window in days from attestation creation time.
+    pub default_expiration_days: Option<u32>,
+    /// Optional default metadata string (max 256 bytes).
+    pub metadata_template: Option<String>,
 }
 
 /// Admin council: ordered list of admin addresses.
