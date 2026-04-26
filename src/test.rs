@@ -4185,3 +4185,282 @@ mod issuer_tier_tests {
         assert_eq!(client.get_issuer_tier(&issuer), Some(types::IssuerTier::Basic));
     }
 }
+
+// ── valid_from / Pending lifecycle tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod valid_from_lifecycle {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        Env, String,
+    };
+
+    /// Deploy contract, initialize, register one issuer; return (admin, issuer, subject, client).
+    fn setup(env: &Env) -> (Address, Address, Address, TrustLinkContractClient<'_>) {
+        let contract_id = env.register_contract(None, TrustLinkContract);
+        let client = TrustLinkContractClient::new(env, &contract_id);
+        let admin = Address::generate(env);
+        let issuer = Address::generate(env);
+        let subject = Address::generate(env);
+        client.initialize(&admin, &None);
+        client.register_issuer(&admin, &issuer);
+        (admin, issuer, subject, client)
+    }
+
+    // ── 1. Basic Pending → Valid transition ──────────────────────────────────
+
+    #[test]
+    fn test_pending_before_valid_from_then_valid_after() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        // valid_from is 500 seconds in the future
+        let valid_from: u64 = 1500;
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &valid_from,
+        );
+
+        // Before valid_from: status must be Pending
+        assert_eq!(
+            client.get_attestation_status(&id),
+            types::AttestationStatus::Pending,
+            "status should be Pending before valid_from"
+        );
+
+        // has_valid_claim must return false while Pending
+        assert!(
+            !client.has_valid_claim(&subject, &claim),
+            "has_valid_claim must be false while attestation is Pending"
+        );
+
+        // Advance ledger to exactly valid_from
+        env.ledger().set_timestamp(valid_from);
+
+        assert_eq!(
+            client.get_attestation_status(&id),
+            types::AttestationStatus::Valid,
+            "status should be Valid at exactly valid_from"
+        );
+        assert!(
+            client.has_valid_claim(&subject, &claim),
+            "has_valid_claim must be true once valid_from is reached"
+        );
+    }
+
+    // ── 2. Boundary: one second before valid_from ─────────────────────────────
+
+    #[test]
+    fn test_pending_one_second_before_valid_from() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+        let valid_from: u64 = 2000;
+
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &valid_from,
+        );
+
+        // One second before valid_from → still Pending
+        env.ledger().set_timestamp(valid_from - 1);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Pending);
+        assert!(!client.has_valid_claim(&subject, &claim));
+
+        // Exactly at valid_from → Valid
+        env.ledger().set_timestamp(valid_from);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Valid);
+        assert!(client.has_valid_claim(&subject, &claim));
+    }
+
+    // ── 3. valid_from stored on the attestation struct ────────────────────────
+
+    #[test]
+    fn test_valid_from_stored_on_attestation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+        let valid_from: u64 = 9999;
+
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &valid_from,
+        );
+
+        let att = client.get_attestation(&id);
+        assert_eq!(att.valid_from, Some(valid_from), "valid_from must be persisted");
+    }
+
+    // ── 4. create_attestation (no valid_from) still works as before ───────────
+
+    #[test]
+    fn test_create_attestation_without_valid_from_is_immediately_valid() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        let id = client.create_attestation(&issuer, &subject, &claim, &None, &None, &None);
+
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Valid);
+        assert!(client.has_valid_claim(&subject, &claim));
+
+        let att = client.get_attestation(&id);
+        assert_eq!(att.valid_from, None, "standard attestation must have valid_from = None");
+    }
+
+    // ── 5. InvalidValidFrom when valid_from is in the past ────────────────────
+
+    #[test]
+    #[should_panic]
+    fn test_create_with_past_valid_from_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(5000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        // valid_from in the past → must return InvalidValidFrom
+        client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &4999,
+        );
+    }
+
+    // ── 6. InvalidValidFrom when valid_from == current timestamp ──────────────
+
+    #[test]
+    #[should_panic]
+    fn test_create_with_valid_from_equal_to_now_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(5000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        // valid_from == now → must be rejected (must be strictly future)
+        client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &5000,
+        );
+    }
+
+    // ── 7. Pending attestation does not satisfy has_valid_claim ───────────────
+
+    #[test]
+    fn test_has_valid_claim_false_while_pending_even_with_other_claims() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let kyc = String::from_str(&env, "KYC_PASSED");
+        let aml = String::from_str(&env, "AML_CLEARED");
+
+        // Create a valid AML attestation
+        client.create_attestation(&issuer, &subject, &aml, &None, &None, &None);
+
+        // Create a pending KYC attestation
+        client.create_attestation_with_valid_from(
+            &issuer, &subject, &kyc, &None, &None, &None, &9999,
+        );
+
+        // AML is valid
+        assert!(client.has_valid_claim(&subject, &aml));
+        // KYC is still pending
+        assert!(!client.has_valid_claim(&subject, &kyc));
+    }
+
+    // ── 8. Pending → Valid → Expired full lifecycle ───────────────────────────
+
+    #[test]
+    fn test_full_lifecycle_pending_valid_expired() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        let valid_from: u64 = 2000;
+        let expiration: u64 = 3000;
+
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &Some(expiration), &None, &None, &valid_from,
+        );
+
+        // Phase 1: Pending
+        env.ledger().set_timestamp(1500);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Pending);
+        assert!(!client.has_valid_claim(&subject, &claim));
+
+        // Phase 2: Valid
+        env.ledger().set_timestamp(2500);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Valid);
+        assert!(client.has_valid_claim(&subject, &claim));
+
+        // Phase 3: Expired
+        env.ledger().set_timestamp(3000);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Expired);
+        assert!(!client.has_valid_claim(&subject, &claim));
+    }
+
+    // ── 9. Revoked pending attestation stays Pending (revoked check is after) ─
+
+    #[test]
+    fn test_pending_takes_priority_over_revoked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &9999,
+        );
+
+        // Revoke while still pending
+        client.revoke_attestation(&issuer, &id, &None);
+
+        // get_status checks valid_from first, so it should still be Pending
+        assert_eq!(
+            client.get_attestation_status(&id),
+            types::AttestationStatus::Pending,
+            "Pending takes priority over Revoked per get_status ordering"
+        );
+    }
+
+    // ── 10. Far-future valid_from ─────────────────────────────────────────────
+
+    #[test]
+    fn test_far_future_valid_from_stays_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+
+        let (_admin, issuer, subject, client) = setup(&env);
+        let claim = String::from_str(&env, "KYC_PASSED");
+
+        // valid_from 100 years out (approx)
+        let far_future: u64 = 1000 + 100 * 365 * 24 * 3600;
+        let id = client.create_attestation_with_valid_from(
+            &issuer, &subject, &claim, &None, &None, &None, &far_future,
+        );
+
+        // Advance 10 years — still pending
+        env.ledger().set_timestamp(1000 + 10 * 365 * 24 * 3600);
+        assert_eq!(client.get_attestation_status(&id), types::AttestationStatus::Pending);
+        assert!(!client.has_valid_claim(&subject, &claim));
+    }
+}
